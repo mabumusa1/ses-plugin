@@ -1,0 +1,27 @@
+{
+    "name": "steercampaign/plugin-mailerses",
+    "description": "AWS SES Mailer Plugin for Mautic",
+    "type": "mautic-plugin",
+    "keywords": [
+        "mautic",
+        "plugin",
+        "integration",
+        "aws ses"
+    ],
+    "homepage": "https://steercampaign.com",
+    "authors": [
+        {
+            "name": "Mohammad Abu Musa",
+            "email": "m.abumusa@steercampaign.com"
+        }
+    ],
+    "extra": {
+        "install-directory-name": "ScMailerSesBundle"
+    },
+    "minimum-stability": "dev",
+    "require": {
+        "mautic/core-lib": "^5.0",
+        "aws/aws-sdk-php": "~3.0",
+        "bandwidth-throttle/token-bucket": "^2.0"
+    }
+}
