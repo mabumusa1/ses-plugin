@@ -27,7 +27,7 @@ class DsnSesConvertor
     public static function convertArrayToDsnString(array $parameters): string
     {
         $dsn = new Dsn(
-            'sc+ses+api',
+            'ses+api',
             'default',
             $parameters['mailer_user'],
             $parameters['mailer_password'],

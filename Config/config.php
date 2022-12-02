@@ -7,7 +7,7 @@ return [
     'author'      => 'Steer Campaign',
     'services'    => [
         'others' => [
-            'ses_api' => [
+            'ses+api' => [
                 'class'        => \MauticPlugin\ScMailerSesBundle\Mailer\Transport\SesTransportExtension::class,
                 'arguments'    => [
                     'mautic.email.ses.callback',

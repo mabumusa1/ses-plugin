@@ -46,7 +46,7 @@ class ConfigType extends AbstractType
                 'required'    => true,
                 'attr'        => [
                     'class'        => 'form-control used-in-test',
-                    'data-show-on' => '{"config_emailconfig_mailer_transport":["sc+ses+api"]}',
+                    'data-show-on' => '{"config_emailconfig_mailer_transport":["ses+api"]}',
                     'tooltip'      => 'mautic.email.config.mailer.amazon_region.tooltip',
                     'onchange'     => 'Mautic.disableSendTestEmailButton()',
                 ],
