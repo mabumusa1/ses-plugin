@@ -319,21 +319,21 @@ final class SesTransport extends AbstractTokenArrayTransport implements TokenTra
                     $payload['Content'] = [
                         'Simple' => [
                             'Subject' => [
-                                'Data'    => $email->getSubject(),
+                                'Data'    => $this->message->getSubject(),
                                 'Charset' => 'utf-8',
                             ],
                         ],
                     ];
                     if ($email->getTextBody()) {
                         $payload['Content']['Simple']['Body']['Text'] = [
-                            'Data'    => $email->getTextBody(),
-                            'Charset' => $email->getTextCharset(),
+                            'Data'    => $this->message->getTextBody(),
+                            'Charset' => $this->message->getTextCharset(),
                         ];
                     }
                     if ($email->getHtmlBody()) {
                         $payload['Content']['Simple']['Body']['Html'] = [
-                            'Data'    => $email->getHtmlBody(),
-                            'Charset' => $email->getHtmlCharset(),
+                            'Data'    => $this->message->getHtmlBody(),
+                            'Charset' => $this->message->getHtmlCharset(),
                         ];
                     }
                     if ($emails = $email->getReplyTo()) {
