@@ -22,14 +22,14 @@ final class ScSesFactory extends AbstractTransportFactory
 {
     public function create(Dsn $dsn): TransportInterface
     {
-        if (! $this->supports($dsn)) {
+        if (!$this->supports($dsn)) {
             throw new UnsupportedSchemeException($dsn);
         }
 
-        $user = $dsn->getUser();
+        $user     = $dsn->getUser();
         $password = $dsn->getPassword();
-        $limit = (null === $dsn->getOption('limit')) ? 50 : (int) $dsn->getOption('limit');
-        $region = $dsn->getOption('region');
+        $limit    = (null === $dsn->getOption('limit')) ? 50 : (int) $dsn->getOption('limit');
+        $region   = $dsn->getOption('region');
 
         if (null === $region) {
             throw new \InvalidArgumentException('The "region" option must be set.');

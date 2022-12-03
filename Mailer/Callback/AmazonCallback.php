@@ -50,9 +50,9 @@ class AmazonCallback implements CallbackTransportInterface
         TranslatorInterface $translator,
         TransportCallback $transportCallback
     ) {
-        $this->logger = $logger;
-        $this->httpClient = $httpClient;
-        $this->translator = $translator;
+        $this->logger            = $logger;
+        $this->httpClient        = $httpClient;
+        $this->translator        = $translator;
         $this->transportCallback = $transportCallback;
     }
 
@@ -67,7 +67,7 @@ class AmazonCallback implements CallbackTransportInterface
             throw new HttpException(400, 'AmazonCallback: Invalid JSON Payload');
         }
 
-        if (! isset($payload['Type']) && ! isset($payload['eventType'])) {
+        if (!isset($payload['Type']) && !isset($payload['eventType'])) {
             throw new HttpException(400, "Key 'Type' not found in payload ");
         }
 

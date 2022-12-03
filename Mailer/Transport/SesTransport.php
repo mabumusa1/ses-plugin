@@ -108,7 +108,7 @@ final class SesTransport extends AbstractTokenArrayTransport implements TokenTra
             urlencode($credentials->getAccessKeyId()),
             urlencode($credentials->getSecretKey()),
             'default',
-            ! empty($parameters) ? '?'.$parameters : ''
+            !empty($parameters) ? '?'.$parameters : ''
         );
     }
 
@@ -123,18 +123,18 @@ final class SesTransport extends AbstractTokenArrayTransport implements TokenTra
             /**
              * SES limits creating templates to approximately one per second.
              */
-            $storageCreate = new SingleProcessStorage();
-            $rateCreate = new Rate(1, Rate::SECOND);
-            $bucketCreate = new TokenBucket(1, $rateCreate, $storageCreate);
+            $storageCreate                      = new SingleProcessStorage();
+            $rateCreate                         = new Rate(1, Rate::SECOND);
+            $bucketCreate                       = new TokenBucket(1, $rateCreate, $storageCreate);
             $this->createTemplateBucketConsumer = new BlockingConsumer($bucketCreate);
             $bucketCreate->bootstrap(1);
 
             /**
              * SES limits sending emails based on requested account-level limits.
              */
-            $storageSend = new SingleProcessStorage();
-            $rateSend = new Rate($this->concurrency, Rate::SECOND);
-            $bucketSend = new TokenBucket($this->concurrency, $rateSend, $storageSend);
+            $storageSend                      = new SingleProcessStorage();
+            $rateSend                         = new Rate($this->concurrency, Rate::SECOND);
+            $bucketSend                       = new TokenBucket($this->concurrency, $rateSend, $storageSend);
             $this->sendTemplateBucketConsumer = new BlockingConsumer($bucketSend);
             $bucketSend->bootstrap($this->concurrency);
         } catch (\InvalidArgumentException $e) {
@@ -156,8 +156,8 @@ final class SesTransport extends AbstractTokenArrayTransport implements TokenTra
              * AWS SES has a limit of how many messages can be sent in a 24h time slot. The remaining messages are calculated
              * from the api. The transport will fail when the quota is exceeded.
              */
-            $account = $this->client->getAccount();
-            $maxSendRate = (int) floor($account->get('SendQuota')['MaxSendRate']);
+            $account           = $this->client->getAccount();
+            $maxSendRate       = (int) floor($account->get('SendQuota')['MaxSendRate']);
             $this->concurrency = $maxSendRate;
             $this->setMaxPerSecond($maxSendRate);
 
@@ -176,7 +176,7 @@ final class SesTransport extends AbstractTokenArrayTransport implements TokenTra
             * Get the original email message.
             * Then count the number of recipients.
             */
-            if (! $message->getOriginalMessage() instanceof MauticMessage) {
+            if (!$message->getOriginalMessage() instanceof MauticMessage) {
                 throw new \Exception('Message must be an instance of '.MauticMessage::class);
             }
             $email = $message->getOriginalMessage();
@@ -188,19 +188,19 @@ final class SesTransport extends AbstractTokenArrayTransport implements TokenTra
             */
             if ($email->getAttachments()) {
                 //It is not a MauticMessge or it has attachments so we need to send it as a raw email
-                $this->sendRawOrSimpleEmail($message, true);
+                $this->sendRawOrSimpleEmail($message);
             } else {
                 if (count($email->getMetadata()) >= $this->getMaxBatchLimit()) {
                     list($template, $request) = $this->generateBulkTemplateAndMessage($message);
                     $this->createSesTemplate($template);
                     $this->sendBulkEmail($count, $request);
                 } else {
-                    $this->sendRawOrSimpleEmail($message, false);
+                    $this->sendRawOrSimpleEmail($message);
                 }
             }
         } catch (SesException $exception) {
             $message = $exception->getAwsErrorMessage() ?: $exception->getMessage();
-            $code = $exception->getStatusCode() ?: $exception->getCode();
+            $code    = $exception->getStatusCode() ?: $exception->getCode();
             throw new TransportException(sprintf('Unable to send an email: %s (code %s).', $message, $code));
         } catch (\Exception $exception) {
             throw new TransportException(sprintf('Unable to send an email: %s .', $exception->getMessage()));
@@ -229,23 +229,16 @@ final class SesTransport extends AbstractTokenArrayTransport implements TokenTra
         return $this->credentials;
     }
 
-    protected function sendRawOrSimpleEmail(SentMessage $message, bool $raw = true): bool
+    protected function sendRawOrSimpleEmail(SentMessage $message): bool
     {
-        $email = $message->getOriginalMessage();
+        $email    = $message->getOriginalMessage();
         $envelope = $message->getEnvelope();
 
         try {
             $commands = [];
-            if ($raw) {
-                //@phpstan-ignore-next-line
-                foreach ($this->generateEmailPayload($email, $envelope, $raw) as $rawEmail) {
-                    $commands[] = $this->client->getCommand('sendEmail', $rawEmail);
-                }
-            } else {
-                //@phpstan-ignore-next-line
-                foreach ($this->generateEmailPayload($email, $envelope, $raw) as $rawEmail) {
-                    $commands[] = $this->client->getCommand('sendEmail', $rawEmail);
-                }
+            //@phpstan-ignore-next-line
+            foreach ($this->generateEmailPayload($email, $envelope) as $rawEmail) {
+                $commands[] = $this->client->getCommand('sendEmail', $rawEmail);
             }
             $pool = new CommandPool($this->client, $commands, [
             'concurrency' => $this->concurrency,
@@ -272,10 +265,10 @@ final class SesTransport extends AbstractTokenArrayTransport implements TokenTra
      *
      * @param MauticMessage $email
      */
-    protected function generateEmailPayload(Email $email, Envelope $envelope, bool $raw = true): \Generator
+    protected function generateEmailPayload(Email $email, Envelope $envelope): \Generator
     {
         $this->message = $email;
-        $metadata = $this->getMetadata();
+        $metadata      = $this->getMetadata();
 
         $payload = [
             'FromEmailAddress' => $envelope->getSender()->toString(),
@@ -302,48 +295,21 @@ final class SesTransport extends AbstractTokenArrayTransport implements TokenTra
             }
         }
 
-        if (! empty($metadata)) {
-            $metadataSet = reset($metadata);
-            $tokens = (! empty($metadataSet['tokens'])) ? $metadataSet['tokens'] : [];
+        if (!empty($metadata)) {
+            $metadataSet  = reset($metadata);
+            $tokens       = (!empty($metadataSet['tokens'])) ? $metadataSet['tokens'] : [];
             $mauticTokens = array_keys($tokens);
         }
 
         foreach ($metadata as $recipient => $mailData) {
             $this->replaceTokens($mauticTokens, $mailData['tokens']);
-            if ($raw) {
-                $payload['Content'] = [
-                    'Raw' => [
-                        'Data' => $this->message->toString(),
-                    ],
-                ];
-            } else {
-                $payload['Content'] = [
-                    'Simple' => [
-                        'Subject' => [
-                            'Data'    => $this->message->getSubject(),
-                            'Charset' => 'utf-8',
-                        ],
-                    ],
-                ];
-                if ($email->getTextBody()) {
-                    $payload['Content']['Simple']['Body']['Text'] = [
-                        'Data'    => $this->message->getTextBody(),
-                        'Charset' => $this->message->getTextCharset(),
-                    ];
-                }
-                if ($email->getHtmlBody()) {
-                    $payload['Content']['Simple']['Body']['Html'] = [
-                        'Data'    => $this->message->getHtmlBody(),
-                        'Charset' => $this->message->getHtmlCharset(),
-                    ];
-                }
-                if ($emails = $email->getReplyTo()) {
-                    $payload['ReplyToAddresses'] = $this->stringifyAddresses($emails);
-                }
-            }
+            $payload['Content'] = [
+                'Raw' => [
+                    'Data' => $this->message->toString(),
+                ],
+            ];
+            yield $payload;
         }
-
-        yield $payload;
     }
 
     /**
@@ -375,22 +341,22 @@ final class SesTransport extends AbstractTokenArrayTransport implements TokenTra
     private function generateBulkTemplateAndMessage(SentMessage $message): array
     {
         $email = $message->getOriginalMessage();
-        if (! $email instanceof MauticMessage) {
+        if (!$email instanceof MauticMessage) {
             throw new \InvalidArgumentException('The message must be an instance of '.MauticMessage::class);
         }
 
-        $envelope = $message->getEnvelope();
+        $envelope      = $message->getEnvelope();
         $this->message = $email;
-        $metadata = $this->getMetadata();
-        $messageArray = [];
-        if (! empty($metadata)) {
-            $metadataSet = reset($metadata);
-            $emailId = $metadataSet['emailId'];
-            $tokens = (! empty($metadataSet['tokens'])) ? $metadataSet['tokens'] : [];
+        $metadata      = $this->getMetadata();
+        $messageArray  = [];
+        if (!empty($metadata)) {
+            $metadataSet  = reset($metadata);
+            $emailId      = $metadataSet['emailId'];
+            $tokens       = (!empty($metadataSet['tokens'])) ? $metadataSet['tokens'] : [];
             $mauticTokens = array_keys($tokens);
             $tokenReplace = $amazonTokens = [];
             foreach ($tokens as $search => $token) {
-                $tokenKey = preg_replace('/[^\da-z]/i', '_', trim($search, '{}'));
+                $tokenKey              = preg_replace('/[^\da-z]/i', '_', trim($search, '{}'));
                 $tokenReplace[$search] = '{{'.$tokenKey.'}}';
                 $amazonTokens[$search] = $tokenKey;
             }

@@ -21,7 +21,6 @@ use Mautic\EmailBundle\Mailer\Transport\TestConnectionInterface;
 use Mautic\EmailBundle\Mailer\Transport\TransportExtensionInterface;
 use MauticPlugin\ScMailerSesBundle\Mailer\Callback\AmazonCallback;
 use Symfony\Component\HttpFoundation\Request;
-use Symfony\Component\Mailer\Transport\Dsn;
 
 class SesTransportExtension implements CallbackTransportInterface, TransportExtensionInterface, TestConnectionInterface
 {
@@ -45,7 +44,7 @@ class SesTransportExtension implements CallbackTransportInterface, TransportExte
     public function testConnection(array $settings): bool
     {
         // settings array should include username and password
-        if ($settings['mailer_user'] == '' || $settings['mailer_password'] == '') {
+        if ('' == $settings['mailer_user'] || '' == $settings['mailer_password']) {
             throw new ConnectionErrorException('You need to provide username and passwords, passwords are not auto-filled');
         }
 
@@ -58,13 +57,13 @@ class SesTransportExtension implements CallbackTransportInterface, TransportExte
     ]);
 
         try {
-            $account = $client->getAccount();
+            $account             = $client->getAccount();
             $emailQuotaRemaining = $account->get('SendQuota')['Max24HourSend'] - $account->get('SendQuota')['SentLast24Hours'];
         } catch (SesV2Exception $exception) {
             throw new ConnectionErrorException($exception->getMessage());
         }
 
-        if (! $account->get('SendingEnabled')) {
+        if (!$account->get('SendingEnabled')) {
             throw new ConnectionErrorException('Your AWS SES is not enabled for sending');
         }
 

@@ -38,13 +38,13 @@ class DsnSesConvertor
         );
 
         $dsnString = $dsn->getScheme().'://';
-        if (! empty($dsn->getUser())) {
+        if (!empty($dsn->getUser())) {
             $dsnString .= $dsn->getUser();
         }
-        if (! empty($dsn->getPassword())) {
+        if (!empty($dsn->getPassword())) {
             $dsnString .= ':'.$dsn->getPassword();
         }
-        if (! empty($dsn->getUser()) || ! empty($dsn->getPassword())) {
+        if (!empty($dsn->getUser()) || !empty($dsn->getPassword())) {
             $dsnString .= '@';
         }
         $dsnString .= $dsn->getHost();
@@ -55,7 +55,7 @@ class DsnSesConvertor
                 $options[$option] = $dsn->getOption($option);
             }
         }
-        if (! empty($options)) {
+        if (!empty($options)) {
             $dsnString .= '?'.http_build_query($options);
         }
 
