@@ -11,6 +11,7 @@ declare(strict_types=1);
 
 namespace MauticPlugin\ScMailerSesBundle\Mailer\Transport;
 
+use Aws\Credentials\CredentialProvider;
 use Aws\Credentials\Credentials;
 use Aws\SesV2\Exception\SesV2Exception;
 use Aws\SesV2\SesV2Client;

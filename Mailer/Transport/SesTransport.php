@@ -306,47 +306,41 @@ final class SesTransport extends AbstractTokenArrayTransport implements TokenTra
             $metadataSet = reset($metadata);
             $tokens = (! empty($metadataSet['tokens'])) ? $metadataSet['tokens'] : [];
             $mauticTokens = array_keys($tokens);
-            foreach ($metadata as $recipient => $mailData) {
-                $this->replaceTokens($mauticTokens, $mailData['tokens']);
-                if ($raw) {
-                    $payload['Content'] = [
-                        'Raw' => [
-                            'Data' => $this->message->toString(),
+        }
+
+        foreach ($metadata as $recipient => $mailData) {
+            $this->replaceTokens($mauticTokens, $mailData['tokens']);
+            if ($raw) {
+                $payload['Content'] = [
+                    'Raw' => [
+                        'Data' => $this->message->toString(),
+                    ],
+                ];
+            } else {
+                $payload['Content'] = [
+                    'Simple' => [
+                        'Subject' => [
+                            'Data'    => $this->message->getSubject(),
+                            'Charset' => 'utf-8',
                         ],
+                    ],
+                ];
+                if ($email->getTextBody()) {
+                    $payload['Content']['Simple']['Body']['Text'] = [
+                        'Data'    => $this->message->getTextBody(),
+                        'Charset' => $this->message->getTextCharset(),
                     ];
-                } else {
-                    $this->replaceTokens($mauticTokens, $mailData['tokens']);
-                    $payload['Content'] = [
-                        'Simple' => [
-                            'Subject' => [
-                                'Data'    => $this->message->getSubject(),
-                                'Charset' => 'utf-8',
-                            ],
-                        ],
+                }
+                if ($email->getHtmlBody()) {
+                    $payload['Content']['Simple']['Body']['Html'] = [
+                        'Data'    => $this->message->getHtmlBody(),
+                        'Charset' => $this->message->getHtmlCharset(),
                     ];
-                    if ($email->getTextBody()) {
-                        $payload['Content']['Simple']['Body']['Text'] = [
-                            'Data'    => $this->message->getTextBody(),
-                            'Charset' => $this->message->getTextCharset(),
-                        ];
-                    }
-                    if ($email->getHtmlBody()) {
-                        $payload['Content']['Simple']['Body']['Html'] = [
-                            'Data'    => $this->message->getHtmlBody(),
-                            'Charset' => $this->message->getHtmlCharset(),
-                        ];
-                    }
-                    if ($emails = $email->getReplyTo()) {
-                        $payload['ReplyToAddresses'] = $this->stringifyAddresses($emails);
-                    }
+                }
+                if ($emails = $email->getReplyTo()) {
+                    $payload['ReplyToAddresses'] = $this->stringifyAddresses($emails);
                 }
             }
-        } else {
-            $payload['Content'] = [
-                'Raw' => [
-                    'Data' => $this->message->toString(),
-                ],
-            ];
         }
 
         yield $payload;
