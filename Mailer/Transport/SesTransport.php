@@ -64,6 +64,11 @@ final class SesTransport extends AbstractTokenArrayTransport implements TokenTra
     private $concurrency;
 
     /**
+     * @var bool
+     */
+    private $enableTemplate;
+
+    /**
      * @param callable|null        $handler
      * @param array<string, mixed> $config
      */
@@ -79,6 +84,8 @@ final class SesTransport extends AbstractTokenArrayTransport implements TokenTra
             'credentials' => $config['creds'],
             'handler'     => $handler,
         ]);
+
+        $this->enableTemplate = $config['enableTemplate'];
 
         $this->templateCache = [];
     }
@@ -101,7 +108,7 @@ final class SesTransport extends AbstractTokenArrayTransport implements TokenTra
             $credentials = new Credentials('', '');
         }
 
-        $parameters = http_build_query(['region' => $this->client->getRegion()]);
+        $parameters = http_build_query(['region' => $this->client->getRegion(), 'enableTemplate' => $this->enableTemplate]);
 
         return sprintf(
             'ses+api://%s:%s@%s%s',
@@ -190,7 +197,7 @@ final class SesTransport extends AbstractTokenArrayTransport implements TokenTra
                 //It is not a MauticMessge or it has attachments so we need to send it as a raw email
                 $this->sendRawOrSimpleEmail($message);
             } else {
-                if (count($email->getMetadata()) >= $this->getMaxBatchLimit()) {
+                if ($this->enableTemplate) {
                     list($template, $request) = $this->generateBulkTemplateAndMessage($message);
                     $this->createSesTemplate($template);
                     $this->sendBulkEmail($count, $request);

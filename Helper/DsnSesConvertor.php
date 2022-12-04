@@ -17,6 +17,7 @@ class DsnSesConvertor
 {
     private const ALLOWED_OPTIONS = [
         'region',
+        'send_template',
     ];
 
     /**
@@ -33,7 +34,8 @@ class DsnSesConvertor
             $parameters['mailer_password'],
             null,
             [
-            'region'       => $parameters['mailer_option_region'],
+                'region'        => $parameters['mailer_option_region'],
+                'send_template' => $parameters['mailer_option_send_template'],
             ]
         );
 

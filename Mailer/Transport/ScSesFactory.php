@@ -26,10 +26,10 @@ final class ScSesFactory extends AbstractTransportFactory
             throw new UnsupportedSchemeException($dsn);
         }
 
-        $user     = $dsn->getUser();
-        $password = $dsn->getPassword();
-        $limit    = (null === $dsn->getOption('limit')) ? 50 : (int) $dsn->getOption('limit');
-        $region   = $dsn->getOption('region');
+        $user           = $dsn->getUser();
+        $password       = $dsn->getPassword();
+        $enableTemplate = (null === $dsn->getOption('send_template')) ? true : (bool) $dsn->getOption('send_template');
+        $region         = $dsn->getOption('region');
 
         if (null === $region) {
             throw new \InvalidArgumentException('The "region" option must be set.');
@@ -42,9 +42,9 @@ final class ScSesFactory extends AbstractTransportFactory
         }
 
         $config = [
-            'creds'  => $creds,
-            'region' => $region,
-            'limit'  => $limit,
+            'creds'           => $creds,
+            'region'          => $region,
+            'enableTemplate'  => $enableTemplate,
         ];
 
         return new SesTransport($this->dispatcher, $this->logger, $config);

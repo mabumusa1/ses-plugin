@@ -11,6 +11,7 @@ declare(strict_types=1);
 
 namespace MauticPlugin\ScMailerSesBundle\Form\Type;
 
+use Mautic\CoreBundle\Form\Type\YesNoButtonGroupType;
 use Symfony\Component\Form\AbstractType;
 use Symfony\Component\Form\Extension\Core\Type\ChoiceType;
 use Symfony\Component\Form\FormBuilderInterface;
@@ -51,6 +52,23 @@ class ConfigType extends AbstractType
                     'onchange'     => 'Mautic.disableSendTestEmailButton()',
                 ],
                 'placeholder' => false,
+            ]
+        );
+
+        $builder->add(
+            'mailer_option_send_template',
+            YesNoButtonGroupType::class,
+            [
+                'label'      => 'mautic.email.config.mailer.send_template',
+                'label_attr' => ['class' => 'control-label'],
+                'attr'       => [
+                    'class'        => 'form-control used-in-test',
+                    'data-show-on' => '{"config_emailconfig_mailer_transport":["ses+api"]}',
+                    'tooltip'      => 'mautic.email.config.mailer.send_template.tooltip',
+                ],
+                'data'        => empty($options['data']['mailer_option_send_template']) ? false : true,
+                'required'    => true,
+                'empty_data'  => true,
             ]
         );
     }
