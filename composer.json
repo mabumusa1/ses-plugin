@@ -1,5 +1,5 @@
 {
-    "name": "steercampaign/plugin-mailerses",
+    "name": "mabumusa1/ses-plugin",
     "description": "AWS SES Mailer Plugin for Mautic",
     "type": "mautic-plugin",
     "keywords": [

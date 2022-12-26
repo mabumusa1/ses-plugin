@@ -30,7 +30,6 @@ final class ScSesFactory extends AbstractTransportFactory
         $password       = $dsn->getPassword();
         $enableTemplate = (null === $dsn->getOption('send_template')) ? true : (bool) $dsn->getOption('send_template');
         $region         = $dsn->getOption('region');
-
         if (null === $region) {
             throw new \InvalidArgumentException('The "region" option must be set.');
         }
