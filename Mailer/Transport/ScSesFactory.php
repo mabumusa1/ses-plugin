@@ -13,13 +13,25 @@ namespace MauticPlugin\ScMailerSesBundle\Mailer\Transport;
 
 use Aws\Credentials\CredentialProvider;
 use Aws\Credentials\Credentials;
+use Mautic\CacheBundle\Cache\CacheProvider;
+use Psr\EventDispatcher\EventDispatcherInterface;
+use Psr\Log\LoggerInterface;
 use Symfony\Component\Mailer\Exception\UnsupportedSchemeException;
 use Symfony\Component\Mailer\Transport\AbstractTransportFactory;
 use Symfony\Component\Mailer\Transport\Dsn;
 use Symfony\Component\Mailer\Transport\TransportInterface;
+use Symfony\Contracts\HttpClient\HttpClientInterface;
 
 final class ScSesFactory extends AbstractTransportFactory
 {
+    private CacheProvider $cacheProvider;
+
+    public function __construct(EventDispatcherInterface $dispatcher = null, HttpClientInterface $client = null, LoggerInterface $logger = null, CacheProvider $cacheProvider)
+    {
+        parent::__construct($dispatcher, $client, $logger);
+        $this->cacheProvider = $cacheProvider;
+    }
+
     public function create(Dsn $dsn): TransportInterface
     {
         if (!$this->supports($dsn)) {
@@ -46,7 +58,7 @@ final class ScSesFactory extends AbstractTransportFactory
             'enableTemplate'  => $enableTemplate,
         ];
 
-        return new SesTransport($this->dispatcher, $this->logger, $config);
+        return new SesTransport($this->dispatcher, $this->logger, $config, $this->cacheProvider);
     }
 
     /**

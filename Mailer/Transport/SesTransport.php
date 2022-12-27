@@ -2,22 +2,22 @@
 
 namespace MauticPlugin\ScMailerSesBundle\Mailer\Transport;
 
+use Aws\Api\ApiProvider;
+use Aws\Api\Service;
+use Aws\Api\Validator;
+use Aws\CommandInterface;
 use Aws\CommandPool;
 use Aws\Credentials\Credentials;
 use Aws\Exception\AwsException;
 use Aws\Result;
 use Aws\Ses\Exception\SesException;
 use Aws\SesV2\SesV2Client;
-use bandwidthThrottle\tokenBucket\BlockingConsumer;
-use bandwidthThrottle\tokenBucket\Rate;
-use bandwidthThrottle\tokenBucket\storage\SingleProcessStorage;
-use bandwidthThrottle\tokenBucket\storage\StorageException;
-use bandwidthThrottle\tokenBucket\TokenBucket;
-use Exception;
+use Mautic\CacheBundle\Cache\CacheProvider;
 use Mautic\EmailBundle\Mailer\Message\MauticMessage;
 use Mautic\EmailBundle\Mailer\Transport\AbstractTokenArrayTransport;
 use Mautic\EmailBundle\Mailer\Transport\TokenTransportInterface;
 use Psr\Log\LoggerInterface;
+use Symfony\Component\Cache\Psr16Cache;
 use Symfony\Component\Mailer\Envelope;
 use Symfony\Component\Mailer\Exception\TransportException;
 use Symfony\Component\Mailer\Header\MetadataHeader;
@@ -25,6 +25,9 @@ use Symfony\Component\Mailer\SentMessage;
 use Symfony\Component\Mime\Email;
 use Symfony\Component\Mime\Message;
 use Symfony\Contracts\EventDispatcher\EventDispatcherInterface;
+use Mautic\EmailBundle\Helper\MailHelper;
+use Symfony\Component\Mime\Address;
+
 
 final class SesTransport extends AbstractTokenArrayTransport implements TokenTransportInterface
 {
@@ -44,35 +47,24 @@ final class SesTransport extends AbstractTokenArrayTransport implements TokenTra
     private $credentials;
 
     /**
-     * @var array<int, string>
-     */
-    private $templateCache;
-
-    /**
-     * @var BlockingConsumer
-     */
-    private $createTemplateBucketConsumer;
-
-    /**
-     * @var BlockingConsumer
-     */
-    private $sendTemplateBucketConsumer;
-
-    /**
-     * @var int
-     */
-    private $concurrency;
-
-    /**
      * @var bool
      */
     private $enableTemplate;
 
     /**
+     * @var array<int, string>
+     */
+    private $templateCache;
+
+    private CacheProvider $cacheProvider;
+
+    private Psr16Cache $cache;
+
+    /**
      * @param callable|null        $handler
      * @param array<string, mixed> $config
      */
-    public function __construct(EventDispatcherInterface $dispatcher, LoggerInterface $logger, array $config, $handler = null)
+    public function __construct(EventDispatcherInterface $dispatcher, LoggerInterface $logger, array $config, CacheProvider $cacheProvider, $handler = null)
     {
         parent::__construct($dispatcher, $logger);
 
@@ -87,15 +79,30 @@ final class SesTransport extends AbstractTokenArrayTransport implements TokenTra
 
         $this->enableTemplate = $config['enableTemplate'];
 
-        $this->templateCache = [];
+        $this->cacheProvider = $cacheProvider;
+        $this->cache         = $this->cacheProvider->getSimpleCache();
+
+        if ($this->enableTemplate) {
+            /**
+             * Create an array of the tempaltes we want to create on SES
+             * In case we are sending as templates.
+             */
+            if (!$this->cache->has('template_cache')) {
+                $this->templateCache = [];
+            } else {
+                $this->templateCache = $this->cache->get('template_cache');
+            }
+        }
     }
 
     public function __destruct()
     {
-        if (count($this->templateCache)) {
-            $this->logger->debug('Deleting SES templates that were created in this session');
-            foreach ($this->templateCache as $templateName) {
-                $this->deleteSesTemplate($templateName);
+        if ($this->enableTemplate) {
+            if (count($this->templateCache)) {
+                $this->logger->debug('Deleting SES templates that were created in this session');
+                foreach ($this->templateCache as $templateName) {
+                    $this->deleteSesTemplate($templateName);
+                }
             }
         }
     }
@@ -117,101 +124,6 @@ final class SesTransport extends AbstractTokenArrayTransport implements TokenTra
             'default',
             !empty($parameters) ? '?'.$parameters : ''
         );
-    }
-
-    /**
-     * Initialize the token buckets for throttling.
-     *
-     * @throws \Exception
-     */
-    private function initializeThrottles(): void
-    {
-        try {
-            /**
-             * SES limits creating templates to approximately one per second.
-             */
-            $storageCreate                      = new SingleProcessStorage();
-            $rateCreate                         = new Rate(1, Rate::SECOND);
-            $bucketCreate                       = new TokenBucket(1, $rateCreate, $storageCreate);
-            $this->createTemplateBucketConsumer = new BlockingConsumer($bucketCreate);
-            $bucketCreate->bootstrap(1);
-
-            /**
-             * SES limits sending emails based on requested account-level limits.
-             */
-            $storageSend                      = new SingleProcessStorage();
-            $rateSend                         = new Rate($this->concurrency, Rate::SECOND);
-            $bucketSend                       = new TokenBucket($this->concurrency, $rateSend, $storageSend);
-            $this->sendTemplateBucketConsumer = new BlockingConsumer($bucketSend);
-            $bucketSend->bootstrap($this->concurrency);
-        } catch (\InvalidArgumentException $e) {
-            $this->logger->error('error configuring token buckets: '.$e->getMessage());
-            throw new \Exception($e->getMessage());
-        } catch (StorageException $e) {
-            $this->logger->error('error bootstrapping token buckets: '.$e->getMessage());
-            throw new \Exception($e->getMessage());
-        } catch (Exception $e) {
-            $this->logger->error('error initializing token buckets: '.$e->getMessage());
-            throw $e;
-        }
-    }
-
-    protected function doSend(SentMessage $message): void
-    {
-        try {
-            /**
-             * AWS SES has a limit of how many messages can be sent in a 24h time slot. The remaining messages are calculated
-             * from the api. The transport will fail when the quota is exceeded.
-             */
-            $account           = $this->client->getAccount();
-            $maxSendRate       = (int) floor($account->get('SendQuota')['MaxSendRate']);
-            $this->concurrency = $maxSendRate;
-            $this->setMaxPerSecond($maxSendRate);
-
-            $emailQuotaRemaining = $account->get('SendQuota')['Max24HourSend'] - $account->get('SendQuota')['SentLast24Hours'];
-            if ($emailQuotaRemaining <= 0) {
-                $this->logger->error('Your AWS SES quota is currently exceeded, used '.$account->get('SendQuota')['SentLast24Hours'].' of '.$account->get('SendQuota')['Max24HourSend']);
-                throw new \Exception('Your AWS SES quota is currently exceeded');
-            }
-
-            /*
-            * initialize throttle token buckets
-            */
-            $this->initializeThrottles();
-
-            /*
-            * Get the original email message.
-            * Then count the number of recipients.
-            */
-            if (!$message->getOriginalMessage() instanceof MauticMessage) {
-                throw new \Exception('Message must be an instance of '.MauticMessage::class);
-            }
-            $email = $message->getOriginalMessage();
-            $count = $this->getBatchRecipientCount($email);
-
-            /*
-            * If there is an attachment, send mail using sendRawEmail method
-            * SES does not support sending attachments as bulk emails
-            */
-            if ($email->getAttachments()) {
-                //It is not a MauticMessge or it has attachments so we need to send it as a raw email
-                $this->sendRawOrSimpleEmail($message);
-            } else {
-                if ($this->enableTemplate) {
-                    list($template, $request) = $this->generateBulkTemplateAndMessage($message);
-                    $this->createSesTemplate($template);
-                    $this->sendBulkEmail($count, $request);
-                } else {
-                    $this->sendRawOrSimpleEmail($message);
-                }
-            }
-        } catch (SesException $exception) {
-            $message = $exception->getAwsErrorMessage() ?: $exception->getMessage();
-            $code    = $exception->getStatusCode() ?: $exception->getCode();
-            throw new TransportException(sprintf('Unable to send an email: %s (code %s).', $message, $code));
-        } catch (\Exception $exception) {
-            throw new TransportException(sprintf('Unable to send an email: %s .', $exception->getMessage()));
-        }
     }
 
     public function getBatchRecipientCount(Email $message, $toBeAdded = 1, $type = 'to'): int
@@ -236,86 +148,193 @@ final class SesTransport extends AbstractTokenArrayTransport implements TokenTra
         return $this->credentials;
     }
 
-    protected function sendRawOrSimpleEmail(SentMessage $message): bool
+    protected function doSend(SentMessage $message): void
     {
-        $email    = $message->getOriginalMessage();
-        $envelope = $message->getEnvelope();
+        try {
+                if (!$this->cache->has('max_send_rate')) {
+                /**
+                 * AWS SES has a limit of how many messages can be sent in a 24h time slot. The remaining messages are calculated
+                 * from the api. The transport will fail when the quota is exceeded.
+                 */
+                $account           = $this->client->getAccount();
+                $maxSendRate       = (int) floor($account->get('SendQuota')['MaxSendRate']);
+
+                $emailQuotaRemaining = $account->get('SendQuota')['Max24HourSend'] - $account->get('SendQuota')['SentLast24Hours'];
+                if ($emailQuotaRemaining <= 0) {
+                    $this->logger->error('Your AWS SES quota is currently exceeded, used '.$account->get('SendQuota')['SentLast24Hours'].' of '.$account->get('SendQuota')['Max24HourSend']);
+                    throw new \Exception('Your AWS SES quota is currently exceeded');
+                }
+
+                $this->cache->set('max_send_rate', $maxSendRate, 86400);
+            }
+
+            /*
+            * Get the original email message.
+            */
+            $email = $message->getOriginalMessage();
+            if (!$email instanceof MauticMessage) {
+                throw new \Exception('Message must be an instance of '.MauticMessage::class);
+            }
+
+            /*
+            * If there is an attachment, send mail using sendRawEmail method
+            * SES does not support sending attachments as bulk emails
+            */
+            if ($email->getAttachments()) {
+                //It is not a MauticMessge or it has attachments so we need to send it as a raw email
+                $this->sendRaw($message);
+            } else {
+                if ($this->enableTemplate) {
+                    //TODO: add support for templates
+                } else {
+                    $this->sendRaw($message);
+                }
+            }
+        } catch (SesException $exception) {
+            $message = $exception->getAwsErrorMessage() ?: $exception->getMessage();
+            $code    = $exception->getStatusCode() ?: $exception->getCode();
+            throw new TransportException(sprintf('Unable to send an email: %s (code %s).', $message, $code));
+        } catch (\Exception $exception) {
+            throw new TransportException(sprintf('Unable to send an email: %s .', $exception->getMessage()));
+        }
+    }
+
+    /**
+     * @throws \Exception
+     */
+    protected function sendRaw(SentMessage $message): bool
+    {
+        /** @var MauticMessage $email */
+        $this->message = $message->getOriginalMessage();
+        $commands = [];
+        foreach ($this->makeJsonPayload() as $rawEmail) {
+            $commands[] = $this->client->getCommand('sendEmail', $rawEmail);
+        }
+
+        // Initializing command validator.
+        $validator = new Validator();
+        // Specifying SES API to use in validation.
+        $api = new Service(
+            ApiProvider::resolve(
+                ApiProvider::defaultProvider(),
+                'api',
+                'sesv2',
+                '2019-09-27'
+            ),
+            ApiProvider::defaultProvider()
+        );
+
+        // Initializing array to add commands that pass validation.
+        $validCommands = [];
+
+        // Iterating through command list to validate each command.
+        foreach ($commands as $command) {
+            $operation = $api->getOperation($command->getName());
+            try {
+                $validator->validate(
+                    $command->getName(),
+                    $operation->getInput(),
+                    $command->toArray()
+                );
+                array_push($validCommands, $command);
+            } catch (\Exception $e) {
+                $data = $command->toArray();
+                $this->logger->debug('Command to Adresses '. implode(",", $data['Destination']['ToAddresses']) .' is invalid, issue ' . $e->getMessage());
+            }
+        }
 
         try {
-            $commands = [];
-            //@phpstan-ignore-next-line
-            foreach ($this->generateEmailPayload($email, $envelope) as $rawEmail) {
-                $commands[] = $this->client->getCommand('sendEmail', $rawEmail);
-            }
-            $pool = new CommandPool($this->client, $commands, [
-            'concurrency' => $this->concurrency,
-            'fulfilled'   => function (Result $result, $iteratorId) use ($message) {
-                $message->setMessageId((string) $result->get('MessageId'));
-            },
-            'rejected' => function (AwsException $reason, $iteratorId) {
-                $this->throwException($reason->getMessage());
-            },
-        ]);
+            $pool = new CommandPool($this->client, $validCommands, [
+                'concurrency' => $this->cache->get('max_send_rate'),
+                'fulfilled'   => function (Result $result, $iteratorId) use ($validCommands) {
+                    $this->logger->debug('Fulfilled: with SES ID '.$result['MessageId']);
+                },
+                'rejected' => function (AwsException $reason, $iteratorId) use ($validCommands) {
+                    $command = $validCommands[$iteratorId]->toArray();                    
+                    $this->logger->debug('Rejected: message to '. implode(",", $data['Destination']['ToAddresses']) .' with reason '.$reason->getMessage());
+                    $this->throwException($reason->getMessage());
+                },
+            ]);
             $promise = $pool->promise();
             $promise->wait();
 
             return true;
-        } catch (\Exception $e) {
+        } catch (\Exception $th) {
             $this->throwException($e->getMessage());
-        }
 
-        return true;
+            return false;
+        }
     }
 
     /**
-     * Convert the message to parameters for the sendRawEmail API.
+     * Convert the message to parameters for SES API.
      *
      * @param MauticMessage $email
      */
-    protected function generateEmailPayload(Email $email, Envelope $envelope): \Generator
+    protected function makeJsonPayload(): \Generator
     {
-        $this->message = $email;
+        $sentMessage = clone $this->message;
         $metadata      = $this->getMetadata();
 
-        $payload = [
-            'FromEmailAddress' => $envelope->getSender()->toString(),
-            'Destination'      => [
-                'ToAddresses'  => $this->stringifyAddresses($email->getTo()),
-                'CcAddresses'  => $this->stringifyAddresses($email->getCc()),
-                'BccAddresses' => $this->stringifyAddresses($email->getBcc()),
-            ],
-        ];
+        if(empty($metadata)) {
+            $this->logger->debug('No metadata found, sending email as raw');
+            $payload = [
+                'Content' => [
+                    'Raw' => [
+                        'Data' => $sentMessage->toString(),
+                    ],
+                ],
+                'Destination' => [
+                    'ToAddresses' => $this->stringifyAddresses($sentMessage->getTo()),
+                ],
+                'FromEmailAddress' => $sentMessage->getFrom()[0]->getAddress(),
+            ];
 
-        if ($configurationSetHeader = $this->message->getHeaders()->get('X-SES-CONFIGURATION-SET')) {
-            $payload['ConfigurationSetName'] = $configurationSetHeader->getBodyAsString();
-        }
-        if ($sourceArnHeader = $this->message->getHeaders()->get('X-SES-SOURCE-ARN')) {
-            $payload['FromEmailAddressIdentityArn'] = $sourceArnHeader->getBodyAsString();
-        }
-        if ($email->getReturnPath()) {
-            $payload['FeedbackForwardingEmailAddress'] = $email->getReturnPath()->toString();
-        }
-
-        foreach ($this->message->getHeaders()->all() as $header) {
-            if ($header instanceof MetadataHeader) {
-                $payload['EmailTags'][] = ['Name' => $header->getKey(), 'Value' => $header->getValue()];
-            }
-        }
-
-        if (!empty($metadata)) {
+            yield $payload;            
+        }else{
+        /**
+         * This message is a tokenzied message, SES API does not support tokens in Raw Emails
+         * We need to create a new message for each recipient.
+         */
+        
             $metadataSet  = reset($metadata);
             $tokens       = (!empty($metadataSet['tokens'])) ? $metadataSet['tokens'] : [];
-            $mauticTokens = array_keys($tokens);
-        }
-
-        foreach ($metadata as $recipient => $mailData) {
-            $this->replaceTokens($mauticTokens, $mailData['tokens']);
-            $payload['Content'] = [
-                'Raw' => [
-                    'Data' => $this->message->toString(),
-                ],
-            ];
-            yield $payload;
+            $mauticTokens = array_keys($tokens);            
+            foreach ($metadata as $recipient => $mailData) {                
+                $sentMessage->clearMetadata();
+                $sentMessage->updateLeadIdHash($mailData['hashId']);
+                $sentMessage->to(new Address($recipient, $mailData['name']));
+                MailHelper::searchReplaceTokens($mauticTokens, $mailData['tokens'], $sentMessage);
+                $payload['Destination']      = [
+                    'ToAddresses'  => $this->stringifyAddresses($sentMessage->getTo()),
+                    'CcAddresses'  => $this->stringifyAddresses($sentMessage->getCc()),
+                    'BccAddresses' => $this->stringifyAddresses($sentMessage->getBcc()),
+                ];
+                $payload['Content'] = [
+                    'Raw' => [
+                        'Data' => $sentMessage->toString(),
+                    ],
+                ];                
+                $payload['FromEmailAddress'] =$sentMessage->getFrom()[0]->getAddress();
+        
+                if ($configurationSetHeader = $sentMessage->getHeaders()->get('X-SES-CONFIGURATION-SET')) {
+                    $payload['ConfigurationSetName'] = $configurationSetHeader->getBodyAsString();
+                }
+                if ($sourceArnHeader = $sentMessage->getHeaders()->get('X-SES-SOURCE-ARN')) {
+                    $payload['FromEmailAddressIdentityArn'] = $sourceArnHeader->getBodyAsString();
+                }
+                if ($sentMessage->getReturnPath()) {
+                    $payload['FeedbackForwardingEmailAddress'] = $sentMessage->getReturnPath()->toString();
+                }
+        
+                foreach ($sentMessage->getHeaders()->all() as $header) {
+                    if ($header instanceof MetadataHeader) {
+                        $payload['EmailTags'][] = ['Name' => $header->getKey(), 'Value' => $header->getValue()];
+                    }
+                }
+                
+                yield $payload;                        
+            }        
         }
     }
 
@@ -336,177 +355,6 @@ final class SesTransport extends AbstractTokenArrayTransport implements TokenTra
             return $this->client->deleteEmailTemplate(['TemplateName' => $templateName]);
         } catch (AwsException $e) {
             $this->logger->error('Exception deleting template: '.$templateName.', '.$e->getAwsErrorCode().', '.$e->getAwsErrorMessage());
-            throw new \Exception($e->getMessage());
-        }
-    }
-
-    /**
-     * Generate the template and the payload to send to SES.
-     *
-     * @return array<array<string, mixed>>
-     */
-    private function generateBulkTemplateAndMessage(SentMessage $message): array
-    {
-        $email = $message->getOriginalMessage();
-        if (!$email instanceof MauticMessage) {
-            throw new \InvalidArgumentException('The message must be an instance of '.MauticMessage::class);
-        }
-
-        $envelope      = $message->getEnvelope();
-        $this->message = $email;
-        $metadata      = $this->getMetadata();
-        $messageArray  = [];
-        if (!empty($metadata)) {
-            $metadataSet  = reset($metadata);
-            $emailId      = $metadataSet['emailId'];
-            $tokens       = (!empty($metadataSet['tokens'])) ? $metadataSet['tokens'] : [];
-            $mauticTokens = array_keys($tokens);
-            $tokenReplace = $amazonTokens = [];
-            foreach ($tokens as $search => $token) {
-                $tokenKey              = preg_replace('/[^\da-z]/i', '_', trim($search, '{}'));
-                $tokenReplace[$search] = '{{'.$tokenKey.'}}';
-                $amazonTokens[$search] = $tokenKey;
-            }
-            $this->replaceTokens($mauticTokens, $tokenReplace);
-        }
-
-        /*
-         * Let's start by creating the template payload
-         */
-        $template = [
-            'TemplateContent' => [
-                'Subject' => $this->message->getSubject(),
-            ],
-        'TemplateName' => 'MauticTemplate-'.$emailId.'-'.md5($email->getSubject().$email->getHtmlBody()), //unique template name
-        ];
-
-        if ($email->getTextBody()) {
-            $template['TemplateContent']['Text'] = $email->getTextBody();
-        }
-        if ($email->getHtmlBody()) {
-            $template['TemplateContent']['Html'] = $email->getHtmlBody();
-        }
-
-        $destinations = [];
-        foreach ($metadata as $recipient => $mailData) {
-            $ReplacementTemplateData = [];
-            foreach ($mailData['tokens'] as $token => $tokenData) {
-                $ReplacementTemplateData[$amazonTokens[$token]] = $tokenData;
-            }
-
-            $destinations[] = [
-                'Destination' => [
-                    'ToAddresses'  => [$recipient],
-                    'CcAddresses'  => $email->getCc(),
-                    'BccAddresses' => $email->getBcc(),
-                ],
-                'ReplacementEmailContent' => [
-                    'ReplacementTemplate' => [
-                        'ReplacementTemplateData' => json_encode($ReplacementTemplateData),
-                    ],
-                ],
-            ];
-        }
-
-        $request = [
-            'BulkEmailEntries' => $destinations,
-            'FromEmailAddress' => $envelope->getSender()->toString(),
-            'DefaultContent'   => [
-                'Template' => [
-                    'TemplateName' => $template['TemplateName'],
-                    'TemplateData' => json_encode($ReplacementTemplateData),
-                ],
-            ],
-        ];
-
-        if ($configurationSetHeader = $this->message->getHeaders()->get('X-SES-CONFIGURATION-SET')) {
-            $request['ConfigurationSetName'] = $configurationSetHeader->getBodyAsString();
-        }
-
-        if ($sourceArnHeader = $this->message->getHeaders()->get('X-SES-SOURCE-ARN')) {
-            $request['FromEmailAddressIdentityArn'] = $sourceArnHeader->getBodyAsString();
-        }
-        if ($email->getReturnPath()) {
-            $request['FeedbackForwardingEmailAddress'] = $email->getReturnPath()->toString();
-        }
-        if ($emails = $email->getReplyTo()) {
-            $payload['ReplyToAddresses'] = $this->stringifyAddresses($emails);
-        }
-
-        return [$template, $request];
-    }
-
-    /**
-     * @param array<string, mixed> $template
-     *
-     * @return \Aws\Result<string, mixed>|null
-     *
-     * @throws \Exception
-     *
-     * @see https://docs.aws.amazon.com/ses/latest/APIReference/API_CreateTemplate.html
-     */
-    private function createSesTemplate($template)
-    {
-        $templateName = $template['TemplateName'];
-
-        $this->logger->debug('Creating SES template: '.$templateName);
-
-        /*
-         * reuse an existing template if we have created one
-         */
-        if (false !== array_search($templateName, $this->templateCache)) {
-            $this->logger->debug('Template '.$templateName.' already exists in cache');
-
-            return null;
-        }
-
-        /*
-         * wait for a throttle token
-         */
-        $this->createTemplateBucketConsumer->consume(1);
-
-        try {
-            $result = $this->client->createEmailTemplate($template);
-        } catch (AwsException $e) {
-            switch ($e->getAwsErrorCode()) {
-                case 'AlreadyExists':
-                    $this->logger->debug('Exception creating template: '.$templateName.', '.$e->getAwsErrorCode().', '.$e->getAwsErrorMessage().', ignoring');
-                    break;
-                default:
-                    $this->logger->error('Exception creating template: '.$templateName.', '.$e->getAwsErrorCode().', '.$e->getAwsErrorMessage());
-                    throw new \Exception($e->getMessage());
-            }
-        }
-
-        /*
-         * store the name of this template so that we can delete it when we are done sending
-         */
-        $this->templateCache[] = $templateName;
-
-        return $result;
-    }
-
-    /**
-     * @param int                  $count   number of recipients for us to consume from the ticket bucket
-     * @param array<string, mixed> $request
-     *
-     * @return \Aws\Result<string, mixed>
-     *
-     * @throws \Exception
-     *
-     * @see https://docs.aws.amazon.com/ses/latest/APIReference/API_SendBulkTemplatedEmail.html
-     */
-    private function sendBulkEmail($count, $request): Result
-    {
-        $this->logger->debug('Sending SES template: '.$request['DefaultContent']['Template']['TemplateName'].' to '.$count.' recipients');
-
-        // wait for a throttle token
-        $this->sendTemplateBucketConsumer->consume($count);
-
-        try {
-            return $this->client->sendBulkEmail($request);
-        } catch (AwsException $e) {
-            $this->logger->error('Exception sending email template: '.$e->getAwsErrorCode().', '.$e->getAwsErrorMessage());
             throw new \Exception($e->getMessage());
         }
     }
