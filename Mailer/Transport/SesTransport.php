@@ -5,7 +5,6 @@ namespace MauticPlugin\ScMailerSesBundle\Mailer\Transport;
 use Aws\Api\ApiProvider;
 use Aws\Api\Service;
 use Aws\Api\Validator;
-use Aws\CommandInterface;
 use Aws\CommandPool;
 use Aws\Credentials\Credentials;
 use Aws\Exception\AwsException;
@@ -13,20 +12,20 @@ use Aws\Result;
 use Aws\Ses\Exception\SesException;
 use Aws\SesV2\SesV2Client;
 use Mautic\CacheBundle\Cache\CacheProvider;
+use Mautic\EmailBundle\Helper\MailHelper;
 use Mautic\EmailBundle\Mailer\Message\MauticMessage;
 use Mautic\EmailBundle\Mailer\Transport\AbstractTokenArrayTransport;
 use Mautic\EmailBundle\Mailer\Transport\TokenTransportInterface;
 use Psr\Log\LoggerInterface;
 use Symfony\Component\Cache\Psr16Cache;
-use Symfony\Component\Mailer\Envelope;
 use Symfony\Component\Mailer\Exception\TransportException;
 use Symfony\Component\Mailer\Header\MetadataHeader;
 use Symfony\Component\Mailer\SentMessage;
+use Symfony\Component\Mime\Address;
 use Symfony\Component\Mime\Email;
 use Symfony\Component\Mime\Message;
 use Symfony\Contracts\EventDispatcher\EventDispatcherInterface;
-use Mautic\EmailBundle\Helper\MailHelper;
-use Symfony\Component\Mime\Address;
+use Symfony\Component\Mime\MessageConverter;
 
 
 final class SesTransport extends AbstractTokenArrayTransport implements TokenTransportInterface
@@ -56,6 +55,7 @@ final class SesTransport extends AbstractTokenArrayTransport implements TokenTra
      */
     private $templateCache;
 
+
     private CacheProvider $cacheProvider;
 
     private Psr16Cache $cache;
@@ -64,7 +64,7 @@ final class SesTransport extends AbstractTokenArrayTransport implements TokenTra
      * @param callable|null        $handler
      * @param array<string, mixed> $config
      */
-    public function __construct(EventDispatcherInterface $dispatcher, LoggerInterface $logger, array $config, CacheProvider $cacheProvider, $handler = null)
+    public function __construct(EventDispatcherInterface $dispatcher, LoggerInterface $logger, CacheProvider $cacheProvider, array $config, $handler = null)
     {
         parent::__construct($dispatcher, $logger);
 
@@ -92,6 +92,31 @@ final class SesTransport extends AbstractTokenArrayTransport implements TokenTra
             } else {
                 $this->templateCache = $this->cache->get('template_cache');
             }
+        }
+
+        if (!$this->cache->has('max_send_rate')) {
+            /**
+             * AWS SES has a limit of how many messages can be sent in a 24h time slot. The remaining messages are calculated
+             * from the api. The transport will fail when the quota is exceeded.
+             */
+            $account           = $this->client->getAccount();
+            $maxSendRate       = (int) floor($account->get('SendQuota')['MaxSendRate']);
+
+            /**
+             * Since symfony/mailer is transactional by default, we need to set the max send rate to 1
+             * to avoid sending multiple emails at once.
+             * We are getting tokinzed emails, so there will be MaxSendRate emails per call
+             * Mailer should process tokinzed emails one by one
+             * This transport SHOULD NOT RUN IN PARALLEL.
+             */
+            $this->setMaxPerSecond(1);
+
+            $emailQuotaRemaining = $account->get('SendQuota')['Max24HourSend'] - $account->get('SendQuota')['SentLast24Hours'];
+            if ($emailQuotaRemaining <= 0) {
+                $this->logger->error('Your AWS SES quota is currently exceeded, used '.$account->get('SendQuota')['SentLast24Hours'].' of '.$account->get('SendQuota')['Max24HourSend']);
+                throw new \Exception('Your AWS SES quota is currently exceeded');
+            }
+            $this->cache->set('max_send_rate', $maxSendRate, 86400);
         }
     }
 
@@ -151,23 +176,6 @@ final class SesTransport extends AbstractTokenArrayTransport implements TokenTra
     protected function doSend(SentMessage $message): void
     {
         try {
-                if (!$this->cache->has('max_send_rate')) {
-                /**
-                 * AWS SES has a limit of how many messages can be sent in a 24h time slot. The remaining messages are calculated
-                 * from the api. The transport will fail when the quota is exceeded.
-                 */
-                $account           = $this->client->getAccount();
-                $maxSendRate       = (int) floor($account->get('SendQuota')['MaxSendRate']);
-
-                $emailQuotaRemaining = $account->get('SendQuota')['Max24HourSend'] - $account->get('SendQuota')['SentLast24Hours'];
-                if ($emailQuotaRemaining <= 0) {
-                    $this->logger->error('Your AWS SES quota is currently exceeded, used '.$account->get('SendQuota')['SentLast24Hours'].' of '.$account->get('SendQuota')['Max24HourSend']);
-                    throw new \Exception('Your AWS SES quota is currently exceeded');
-                }
-
-                $this->cache->set('max_send_rate', $maxSendRate, 86400);
-            }
-
             /*
             * Get the original email message.
             */
@@ -180,15 +188,11 @@ final class SesTransport extends AbstractTokenArrayTransport implements TokenTra
             * If there is an attachment, send mail using sendRawEmail method
             * SES does not support sending attachments as bulk emails
             */
-            if ($email->getAttachments()) {
+            if ($email->getAttachments() || !$this->enableTemplate) {
                 //It is not a MauticMessge or it has attachments so we need to send it as a raw email
                 $this->sendRaw($message);
             } else {
-                if ($this->enableTemplate) {
-                    //TODO: add support for templates
-                } else {
-                    $this->sendRaw($message);
-                }
+                //Send Templates
             }
         } catch (SesException $exception) {
             $message = $exception->getAwsErrorMessage() ?: $exception->getMessage();
@@ -204,9 +208,13 @@ final class SesTransport extends AbstractTokenArrayTransport implements TokenTra
      */
     protected function sendRaw(SentMessage $message): bool
     {
-        /** @var MauticMessage $email */
-        $this->message = $message->getOriginalMessage();
-        $commands = [];
+        if($message->getOriginalMessage() instanceof MauticMessage) {
+            $this->message = $message->getOriginalMessage();
+        } else {
+            $this->throwException('Message must be an instance of '.MauticMessage::class);
+        }
+
+        $commands      = [];
         foreach ($this->makeJsonPayload() as $rawEmail) {
             $commands[] = $this->client->getCommand('sendEmail', $rawEmail);
         }
@@ -239,27 +247,51 @@ final class SesTransport extends AbstractTokenArrayTransport implements TokenTra
                 array_push($validCommands, $command);
             } catch (\Exception $e) {
                 $data = $command->toArray();
-                $this->logger->debug('Command to Adresses '. implode(",", $data['Destination']['ToAddresses']) .' is invalid, issue ' . $e->getMessage());
+                $this->logger->debug('Command to Adresses '.implode(',', $data['Destination']['ToAddresses']).' is invalid, issue '.$e->getMessage());
             }
         }
+
+        /**
+         * This array will be used to replace
+         * metadata in the current message
+         * in case there are failures.
+         */
+        $failures = [];
 
         try {
             $pool = new CommandPool($this->client, $validCommands, [
                 'concurrency' => $this->cache->get('max_send_rate'),
-                'fulfilled'   => function (Result $result, $iteratorId) use ($validCommands) {
+                'fulfilled'   => function (Result $result, $iteratorId) {
                     $this->logger->debug('Fulfilled: with SES ID '.$result['MessageId']);
                 },
-                'rejected' => function (AwsException $reason, $iteratorId) use ($validCommands) {
-                    $command = $validCommands[$iteratorId]->toArray();                    
-                    $this->logger->debug('Rejected: message to '. implode(",", $data['Destination']['ToAddresses']) .' with reason '.$reason->getMessage());
-                    $this->throwException($reason->getMessage());
+                'rejected' => function (AwsException $reason, $iteratorId) use ($validCommands, &$failures) {
+                    $data = $validCommands[$iteratorId]->toArray();
+                    $failed = Address::create($data['Destination']['ToAddresses'][0]);
+                    array_push($failures, $failed->getAddress());
+                    $this->logger->debug('Rejected: message to '.implode(',', $data['Destination']['ToAddresses']).' with reason '.$reason->getMessage());
                 },
             ]);
             $promise = $pool->promise();
             $promise->wait();
+            if (!empty($failures)) {
+                //Make a copy of the metadata
+                $metadata = $this->message->getMetadata();
+                //Clear the metadata
+                $this->message->clearMetadata();
+                //Add the metadata for the failed recipients
+                foreach ($failures as $failure) {
+                    $this->message->addMetadata($failure, $metadata[$failure]);
+                }
+                $this->logger->debug('There are partial failures, replacing metadata, and failing the message');
+                /*
+                    The message that failed will be retried with only the failed recipients
+                    This transport assume that the queue mode is enabled
+                */
+                $this->throwException('There are  '.count($failures).' partial failures');
+            }
 
             return true;
-        } catch (\Exception $th) {
+        } catch (\Exception $e) {
             $this->throwException($e->getMessage());
 
             return false;
@@ -268,15 +300,13 @@ final class SesTransport extends AbstractTokenArrayTransport implements TokenTra
 
     /**
      * Convert the message to parameters for SES API.
-     *
-     * @param MauticMessage $email
      */
     protected function makeJsonPayload(): \Generator
     {
-        $sentMessage = clone $this->message;
         $metadata      = $this->getMetadata();
-
-        if(empty($metadata)) {
+        $payload       = [];
+        if (empty($metadata)) {
+            $sentMessage   = clone $this->message;
             $this->logger->debug('No metadata found, sending email as raw');
             $payload = [
                 'Content' => [
@@ -289,18 +319,19 @@ final class SesTransport extends AbstractTokenArrayTransport implements TokenTra
                 ],
                 'FromEmailAddress' => $sentMessage->getFrom()[0]->getAddress(),
             ];
-
-            yield $payload;            
-        }else{
-        /**
-         * This message is a tokenzied message, SES API does not support tokens in Raw Emails
-         * We need to create a new message for each recipient.
-         */
-        
+            $this->addSesHeaders($payload, $sentMessage);
+            yield $payload;
+            $payload = [];
+        } else {
+            /**
+             * This message is a tokenzied message, SES API does not support tokens in Raw Emails
+             * We need to create a new message for each recipient.
+             */
             $metadataSet  = reset($metadata);
             $tokens       = (!empty($metadataSet['tokens'])) ? $metadataSet['tokens'] : [];
-            $mauticTokens = array_keys($tokens);            
-            foreach ($metadata as $recipient => $mailData) {                
+            $mauticTokens = array_keys($tokens);
+            foreach ($metadata as $recipient => $mailData) {
+                $sentMessage   = clone $this->message;
                 $sentMessage->clearMetadata();
                 $sentMessage->updateLeadIdHash($mailData['hashId']);
                 $sentMessage->to(new Address($recipient, $mailData['name']));
@@ -314,27 +345,50 @@ final class SesTransport extends AbstractTokenArrayTransport implements TokenTra
                     'Raw' => [
                         'Data' => $sentMessage->toString(),
                     ],
-                ];                
-                $payload['FromEmailAddress'] =$sentMessage->getFrom()[0]->getAddress();
-        
-                if ($configurationSetHeader = $sentMessage->getHeaders()->get('X-SES-CONFIGURATION-SET')) {
-                    $payload['ConfigurationSetName'] = $configurationSetHeader->getBodyAsString();
+                ];
+                $this->addSesHeaders($payload, $sentMessage);
+                yield $payload;
+                $payload = [];
+            }
+        }
+    }
+
+    /**
+     * Add SES supported headers to the payload.
+     *
+     * @param   array<string, mixed>  $payload      [$payload description]
+     * @param   MauticMessage  $sentMessage  the message to be sent
+     *
+     * @return  void
+     */
+    private function addSesHeaders(&$payload, $sentMessage): void
+    {
+        $payload['FromEmailAddress'] = $sentMessage->getFrom()[0]->getAddress();
+        $payload['ReplyToAddresses'] =  $this->stringifyAddresses($sentMessage->getReplyTo());
+
+        foreach ($sentMessage->getHeaders()->all() as $header) {
+            if ($header instanceof MetadataHeader) {
+                $payload['EmailTags'][] = ['Name' => $header->getKey(), 'Value' => $header->getValue()];
+            } else {
+                switch ($header->getName()) {
+                    case 'X-SES-FEEDBACK-FORWARDNG-EMAIL-ADDRESS':
+                        $payload['FeedbackForwardingEmailAddress'] = $header->getBodyAsString();
+                        break;
+                    case 'X-SES-FEEDBACK-FORWARDNG-EMAIL-ADDRESS-IDENTITYARN':
+                        $payload['FeedbackForwardingEmailAddressIdentityArn'] = $header->getBodyAsString();
+                        break;
+                    case 'X-SES-FROM-EMAIL-ADDRESS-IDENTITYARN':
+                        $payload['FromEmailAddressIdentityArn'] = $header->getBodyAsString();
+                        break;
+                    /**
+                     * https://docs.aws.amazon.com/aws-sdk-php/v3/api/api-sesv2-2019-09-27.html#sendemail
+                     * ListManagementOptions is stopped intentionally because Mautic is managing this.
+                     */
+                    case 'X-SES-CONFIGURATION-SET':
+                        $payload['ConfigurationSetName'] = $header->getBodyAsString();
+                        break;
                 }
-                if ($sourceArnHeader = $sentMessage->getHeaders()->get('X-SES-SOURCE-ARN')) {
-                    $payload['FromEmailAddressIdentityArn'] = $sourceArnHeader->getBodyAsString();
-                }
-                if ($sentMessage->getReturnPath()) {
-                    $payload['FeedbackForwardingEmailAddress'] = $sentMessage->getReturnPath()->toString();
-                }
-        
-                foreach ($sentMessage->getHeaders()->all() as $header) {
-                    if ($header instanceof MetadataHeader) {
-                        $payload['EmailTags'][] = ['Name' => $header->getKey(), 'Value' => $header->getValue()];
-                    }
-                }
-                
-                yield $payload;                        
-            }        
+            }
         }
     }
 
