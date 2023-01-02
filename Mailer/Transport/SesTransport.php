@@ -67,6 +67,15 @@ final class SesTransport extends AbstractTokenArrayTransport implements TokenTra
 
         $this->logger = $logger;
 
+        /**
+         * Since symfony/mailer is transactional by default, we need to set the max send rate to 1
+         * to avoid sending multiple emails at once.
+         * We are getting tokinzed emails, so there will be MaxSendRate emails per call
+         * Mailer should process tokinzed emails one by one
+         * This transport SHOULD NOT RUN IN PARALLEL.
+         */
+        $this->setMaxPerSecond(1);
+
         $this->client = new SesV2Client([
             'version'     => 'latest',
             'region'      => $config['region'],
@@ -98,15 +107,6 @@ final class SesTransport extends AbstractTokenArrayTransport implements TokenTra
              */
             $account           = $this->client->getAccount();
             $maxSendRate       = (int) floor($account->get('SendQuota')['MaxSendRate']);
-
-            /**
-             * Since symfony/mailer is transactional by default, we need to set the max send rate to 1
-             * to avoid sending multiple emails at once.
-             * We are getting tokinzed emails, so there will be MaxSendRate emails per call
-             * Mailer should process tokinzed emails one by one
-             * This transport SHOULD NOT RUN IN PARALLEL.
-             */
-            $this->setMaxPerSecond(1);
 
             $emailQuotaRemaining = $account->get('SendQuota')['Max24HourSend'] - $account->get('SendQuota')['SentLast24Hours'];
             if ($emailQuotaRemaining <= 0) {
@@ -276,15 +276,17 @@ final class SesTransport extends AbstractTokenArrayTransport implements TokenTra
     /**
      * @param array<string, mixed> $template
      *
-     * @return \Aws\Result<string, mixed>|null
-     *
      * @throws \Exception
      *
      * @see https://docs.aws.amazon.com/ses/latest/APIReference/API_CreateTemplate.html
      */
-    private function createSesTemplate($template)
+    private function createSesTemplate($template): void
     {
         $templateName = $template['TemplateName'];
+
+        if (in_array($templateName, $this->templateCache)) {
+            $this->logger->debug('Template : '.$templateName.' already exists in cache ...skipping');
+        }
 
         $this->logger->debug('Creating SES template: '.$templateName);
 
@@ -293,15 +295,13 @@ final class SesTransport extends AbstractTokenArrayTransport implements TokenTra
          */
         if (false !== array_search($templateName, $this->templateCache)) {
             $this->logger->debug('Template '.$templateName.' already exists in cache');
-
-            return null;
         }
 
         try {
-            $result = $this->client->createEmailTemplate($template);
+            $this->client->createEmailTemplate($template);
         } catch (AwsException $e) {
             switch ($e->getAwsErrorCode()) {
-                case 'AlreadyExists':
+                case 'AlreadyExistsException':
                     $this->logger->debug('Exception creating template: '.$templateName.', '.$e->getAwsErrorCode().', '.$e->getAwsErrorMessage().', ignoring');
                     break;
                 default:
@@ -314,8 +314,6 @@ final class SesTransport extends AbstractTokenArrayTransport implements TokenTra
          * store the name of this template so that we can delete it when we are done sending
          */
         $this->templateCache[] = $templateName;
-
-        return $result;
     }
 
     /**
@@ -506,6 +504,7 @@ final class SesTransport extends AbstractTokenArrayTransport implements TokenTra
         if (empty($metadata)) {
             $sentMessage   = clone $this->message;
             $this->logger->debug('No metadata found, sending email as raw');
+            $this->addSesHeaders($payload, $sentMessage);
             $payload = [
                 'Content' => [
                     'Raw' => [
@@ -518,7 +517,6 @@ final class SesTransport extends AbstractTokenArrayTransport implements TokenTra
                     'BccAddresses' => $this->stringifyAddresses($sentMessage->getBcc()),
                 ],
             ];
-            $this->addSesHeaders($payload, $sentMessage);
             yield $payload;
             $payload = [];
         } else {
@@ -535,6 +533,7 @@ final class SesTransport extends AbstractTokenArrayTransport implements TokenTra
                 $sentMessage->updateLeadIdHash($mailData['hashId']);
                 $sentMessage->to(new Address($recipient, $mailData['name']));
                 MailHelper::searchReplaceTokens($mauticTokens, $mailData['tokens'], $sentMessage);
+                $this->addSesHeaders($payload, $sentMessage);
                 $payload['Destination']      = [
                     'ToAddresses'  => $this->stringifyAddresses($sentMessage->getTo()),
                     'CcAddresses'  => $this->stringifyAddresses($sentMessage->getCc()),
@@ -545,7 +544,6 @@ final class SesTransport extends AbstractTokenArrayTransport implements TokenTra
                         'Data' => $sentMessage->toString(),
                     ],
                 ];
-                $this->addSesHeaders($payload, $sentMessage);
                 yield $payload;
                 $payload = [];
             }
@@ -558,7 +556,7 @@ final class SesTransport extends AbstractTokenArrayTransport implements TokenTra
      * @param array<string, mixed> $payload     [$payload description]
      * @param MauticMessage        $sentMessage the message to be sent
      */
-    private function addSesHeaders(&$payload, $sentMessage): void
+    private function addSesHeaders(&$payload, &$sentMessage): void
     {
         $payload['FromEmailAddress'] = $sentMessage->getFrom()[0]->getAddress();
         $payload['ReplyToAddresses'] =  $this->stringifyAddresses($sentMessage->getReplyTo());
@@ -570,12 +568,15 @@ final class SesTransport extends AbstractTokenArrayTransport implements TokenTra
                 switch ($header->getName()) {
                     case 'X-SES-FEEDBACK-FORWARDNG-EMAIL-ADDRESS':
                         $payload['FeedbackForwardingEmailAddress'] = $header->getBodyAsString();
+                        $sentMessage->getHeaders()->remove($header->getName());
                         break;
                     case 'X-SES-FEEDBACK-FORWARDNG-EMAIL-ADDRESS-IDENTITYARN':
                         $payload['FeedbackForwardingEmailAddressIdentityArn'] = $header->getBodyAsString();
+                        $sentMessage->getHeaders()->remove($header->getName());
                         break;
                     case 'X-SES-FROM-EMAIL-ADDRESS-IDENTITYARN':
                         $payload['FromEmailAddressIdentityArn'] = $header->getBodyAsString();
+                        $sentMessage->getHeaders()->remove($header->getName());
                         break;
                     /**
                      * https://docs.aws.amazon.com/aws-sdk-php/v3/api/api-sesv2-2019-09-27.html#sendemail
@@ -583,6 +584,7 @@ final class SesTransport extends AbstractTokenArrayTransport implements TokenTra
                      */
                     case 'X-SES-CONFIGURATION-SET':
                         $payload['ConfigurationSetName'] = $header->getBodyAsString();
+                        $sentMessage->getHeaders()->remove($header->getName());
                         break;
                 }
             }
