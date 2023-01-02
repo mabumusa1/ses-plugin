@@ -25,8 +25,6 @@ use Symfony\Component\Mime\Address;
 use Symfony\Component\Mime\Email;
 use Symfony\Component\Mime\Message;
 use Symfony\Contracts\EventDispatcher\EventDispatcherInterface;
-use Symfony\Component\Mime\MessageConverter;
-
 
 final class SesTransport extends AbstractTokenArrayTransport implements TokenTransportInterface
 {
@@ -54,7 +52,6 @@ final class SesTransport extends AbstractTokenArrayTransport implements TokenTra
      * @var array<int, string>
      */
     private $templateCache;
-
 
     private CacheProvider $cacheProvider;
 
@@ -192,7 +189,7 @@ final class SesTransport extends AbstractTokenArrayTransport implements TokenTra
                 //It is not a MauticMessge or it has attachments so we need to send it as a raw email
                 $this->sendRaw($message);
             } else {
-                //Send Templates
+                $this->sendBulkEmail($message);
             }
         } catch (SesException $exception) {
             $message = $exception->getAwsErrorMessage() ?: $exception->getMessage();
@@ -203,12 +200,212 @@ final class SesTransport extends AbstractTokenArrayTransport implements TokenTra
         }
     }
 
+    private function sendBulkEmail(SentMessage $message): void
+    {
+        if ($message->getOriginalMessage() instanceof MauticMessage) {
+            $this->message = $message->getOriginalMessage();
+        } else {
+            $this->throwException('Message must be an instance of '.MauticMessage::class);
+        }
+
+        [$template, $payload] = $this->makeTemplateAndMessagePayload();
+
+        // Initializing command validator.
+        $validator = new Validator();
+        // Specifying SES API to use in validation.
+        $api = new Service(
+            ApiProvider::resolve(
+                ApiProvider::defaultProvider(),
+                'api',
+                'sesv2',
+                '2019-09-27'
+            ),
+            ApiProvider::defaultProvider()
+        );
+
+        try {
+            $commands   = [];
+            $commands[] = $this->client->getCommand('createEmailTemplate', $template);
+            $commands[] = $this->client->getCommand('sendBulkEmail', $payload);
+            foreach ($commands as $command) {
+                $operation = $api->getOperation($command->getName());
+                $validator->validate(
+                    $command->getName(),
+                    $operation->getInput(),
+                    $command->toArray()
+                );
+            }
+
+            $this->createSesTemplate($template);
+
+            $failures = [];
+            $results  = $this->client->sendBulkEmail($payload)->toArray();
+            foreach ($results['BulkEmailEntryResults'] as $i => $result) {
+                if ('SUCCESS' != $result['Status']) {
+                    $this->logger->error('Exception sending email template: '.$result['Error']);
+                    //Save the position of the response, it should match the position of the email in the payload
+                    $failures[] = $i;
+                }
+            }
+            if (!empty($failures)) {
+                //Make a copy of the metadata
+                $metadata = $this->message->getMetadata();
+                //Get the keys of the metadata
+                $keys = array_keys($metadata);
+                //Clear the metadata
+                $this->message->clearMetadata();
+                //Add the metadata for the failed recipients
+                foreach ($failures as $failure) {
+                    $this->message->addMetadata($keys[$failure], $metadata[$keys[$failure]]);
+                }
+                /*
+                    The message that failed will be retried with only the failed recipients
+                    This transport assume that the queue mode is enabled
+                */
+                $this->throwException('There are  '.count($failures).' partial failures');
+            }
+        } catch (AwsException $e) {
+            $this->logger->error('Exception sending email template: '.$e->getAwsErrorCode().', '.$e->getAwsErrorMessage());
+            $this->throwException('Exception sending email template: '.$e->getAwsErrorCode().', '.$e->getAwsErrorMessage());
+        } catch (\Exception $e) {
+            $this->logger->debug('sendBulkEmail Exception: '.$e->getMessage());
+            $this->throwException('sendBulkEmail Exception: '.$e->getMessage());
+        }
+    }
+
+    /**
+     * @param array<string, mixed> $template
+     *
+     * @return \Aws\Result<string, mixed>|null
+     *
+     * @throws \Exception
+     *
+     * @see https://docs.aws.amazon.com/ses/latest/APIReference/API_CreateTemplate.html
+     */
+    private function createSesTemplate($template)
+    {
+        $templateName = $template['TemplateName'];
+
+        $this->logger->debug('Creating SES template: '.$templateName);
+
+        /*
+         * reuse an existing template if we have created one
+         */
+        if (false !== array_search($templateName, $this->templateCache)) {
+            $this->logger->debug('Template '.$templateName.' already exists in cache');
+
+            return null;
+        }
+
+        try {
+            $result = $this->client->createEmailTemplate($template);
+        } catch (AwsException $e) {
+            switch ($e->getAwsErrorCode()) {
+                case 'AlreadyExists':
+                    $this->logger->debug('Exception creating template: '.$templateName.', '.$e->getAwsErrorCode().', '.$e->getAwsErrorMessage().', ignoring');
+                    break;
+                default:
+                    $this->logger->error('Exception creating template: '.$templateName.', '.$e->getAwsErrorCode().', '.$e->getAwsErrorMessage());
+                    $this->throwException('Exception creating template: '.$templateName.', '.$e->getAwsErrorCode().', '.$e->getAwsErrorMessage());
+            }
+        }
+
+        /*
+         * store the name of this template so that we can delete it when we are done sending
+         */
+        $this->templateCache[] = $templateName;
+
+        return $result;
+    }
+
+    /**
+     * Create the template payload for the AWS SES API.
+     *
+     * @throws TransportException
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    private function makeTemplateAndMessagePayload(): array
+    {
+        $metadata      = $this->getMetadata();
+        if (empty($metadata)) {
+            $this->throwException('Metadata is empty, this message should be sent as a raw email');
+        }
+
+        $destinations = [];
+        $metadataSet  = reset($metadata);
+        $emailId      = $metadataSet['emailId'];
+        $tokens       = (!empty($metadataSet['tokens'])) ? $metadataSet['tokens'] : [];
+        $mauticTokens = array_keys($tokens);
+        $tokenReplace = $amazonTokens = [];
+
+        //Convert Mautic Tokens to Amazon SES tokens
+        foreach ($tokens as $search => $token) {
+            $tokenKey              = preg_replace('/[^\da-z]/i', '_', trim($search, '{}'));
+            $tokenReplace[$search] = '{{'.$tokenKey.'}}';
+            $amazonTokens[$search] = $tokenKey;
+        }
+        MailHelper::searchReplaceTokens($mauticTokens, $tokenReplace, $this->message);
+
+        //Create the template payload
+        $md5TemplateName = $this->message->getSubject();
+        $template        = [
+            'TemplateContent' => [
+                'Subject' => $this->message->getSubject(),
+            ],
+        ];
+
+        if ($this->message->getTextBody()) {
+            $template['TemplateContent']['Text'] = $this->message->getTextBody();
+            $md5TemplateName .= $this->message->getTextBody();
+        }
+        if ($this->message->getHtmlBody()) {
+            $template['TemplateContent']['Html'] = $this->message->getHtmlBody();
+            $md5TemplateName .= $this->message->getTextBody();
+        }
+
+        $template['TemplateName'] = 'MauticTemplate-'.$emailId.'-'.md5($md5TemplateName); //unique template name
+
+        foreach ($metadata as $recipient => $mailData) {
+            $ReplacementTemplateData = [];
+            foreach ($mailData['tokens'] as $token => $tokenData) {
+                $ReplacementTemplateData[$amazonTokens[$token]] = $tokenData;
+            }
+            $destinations[] = [
+                'Destination' => [
+                    'ToAddresses'  => $this->stringifyAddresses([new Address($recipient, $mailData['name'])]),
+                    'CcAddresses'  => $this->stringifyAddresses($this->message->getCc()),
+                    'BccAddresses' => $this->stringifyAddresses($this->message->getBcc()),
+                ],
+                'ReplacementEmailContent' => [
+                    'ReplacementTemplate' => [
+                        'ReplacementTemplateData' => json_encode($ReplacementTemplateData),
+                    ],
+                ],
+            ];
+        }
+
+        $payload = [
+            'BulkEmailEntries' => $destinations,
+            'DefaultContent'   => [
+                'Template' => [
+                    'TemplateName' => $template['TemplateName'],
+                    'TemplateData' => json_encode($ReplacementTemplateData),
+                ],
+            ],
+        ];
+
+        $this->addSesHeaders($payload, $this->message);
+
+        return [$template, $payload];
+    }
+
     /**
      * @throws \Exception
      */
     protected function sendRaw(SentMessage $message): bool
     {
-        if($message->getOriginalMessage() instanceof MauticMessage) {
+        if ($message->getOriginalMessage() instanceof MauticMessage) {
             $this->message = $message->getOriginalMessage();
         } else {
             $this->throwException('Message must be an instance of '.MauticMessage::class);
@@ -260,6 +457,7 @@ final class SesTransport extends AbstractTokenArrayTransport implements TokenTra
 
         try {
             $pool = new CommandPool($this->client, $validCommands, [
+                //TODO: Clear the cache if the configuration is changed
                 'concurrency' => $this->cache->get('max_send_rate'),
                 'fulfilled'   => function (Result $result, $iteratorId) {
                     $this->logger->debug('Fulfilled: with SES ID '.$result['MessageId']);
@@ -315,9 +513,10 @@ final class SesTransport extends AbstractTokenArrayTransport implements TokenTra
                     ],
                 ],
                 'Destination' => [
-                    'ToAddresses' => $this->stringifyAddresses($sentMessage->getTo()),
+                    'ToAddresses'  => $this->stringifyAddresses($sentMessage->getTo()),
+                    'CcAddresses'  => $this->stringifyAddresses($sentMessage->getCc()),
+                    'BccAddresses' => $this->stringifyAddresses($sentMessage->getBcc()),
                 ],
-                'FromEmailAddress' => $sentMessage->getFrom()[0]->getAddress(),
             ];
             $this->addSesHeaders($payload, $sentMessage);
             yield $payload;
@@ -356,10 +555,8 @@ final class SesTransport extends AbstractTokenArrayTransport implements TokenTra
     /**
      * Add SES supported headers to the payload.
      *
-     * @param   array<string, mixed>  $payload      [$payload description]
-     * @param   MauticMessage  $sentMessage  the message to be sent
-     *
-     * @return  void
+     * @param array<string, mixed> $payload     [$payload description]
+     * @param MauticMessage        $sentMessage the message to be sent
      */
     private function addSesHeaders(&$payload, $sentMessage): void
     {
@@ -395,21 +592,19 @@ final class SesTransport extends AbstractTokenArrayTransport implements TokenTra
     /**
      * @param string $templateName
      *
-     * @return \Aws\Result<string, mixed>
-     *
      * @throws \Exception
      *
      * @see https://docs.aws.amazon.com/ses/latest/APIReference/API_DeleteTemplate.html
      */
-    private function deleteSesTemplate($templateName)
+    private function deleteSesTemplate($templateName): void
     {
         $this->logger->debug('Deleting SES template: '.$templateName);
 
         try {
-            return $this->client->deleteEmailTemplate(['TemplateName' => $templateName]);
+            $this->client->deleteEmailTemplate(['TemplateName' => $templateName]);
         } catch (AwsException $e) {
             $this->logger->error('Exception deleting template: '.$templateName.', '.$e->getAwsErrorCode().', '.$e->getAwsErrorMessage());
-            throw new \Exception($e->getMessage());
+            $this->throwException('Exception deleting template: '.$templateName.', '.$e->getAwsErrorCode().', '.$e->getAwsErrorMessage());
         }
     }
 }

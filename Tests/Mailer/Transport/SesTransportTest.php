@@ -1,11 +1,10 @@
 <?php
 
-namespace MauticPlugin\ScMailerSesBundle\Tests\Functional\Mailer\Transport;
+namespace MauticPlugin\ScMailerSesBundle\Tests\Mailer\Transport;
 
 use Aws\Command;
 use Aws\Credentials\CredentialProvider;
 use Aws\Credentials\Credentials;
-use PHPUnit\Framework\MockObject\MockObject;
 use Aws\Exception\AwsException;
 use Aws\MockHandler;
 use Aws\Result;
@@ -13,8 +12,8 @@ use Mautic\CacheBundle\Cache\Adapter\FilesystemTagAwareAdapter;
 use Mautic\CacheBundle\Cache\CacheProvider;
 use Mautic\CoreBundle\Helper\CoreParametersHelper;
 use Mautic\EmailBundle\Mailer\Message\MauticMessage;
-use Mautic\EmailBundle\Model\TransportCallback;
 use MauticPlugin\ScMailerSesBundle\Mailer\Transport\SesTransport;
+use PHPUnit\Framework\MockObject\MockObject;
 use Psr\Log\LoggerInterface;
 use Symfony\Component\DependencyInjection\ContainerInterface;
 use Symfony\Component\Mailer\Exception\TransportException;
@@ -68,6 +67,7 @@ class SesTransportTest extends \PHPUnit\Framework\TestCase
     {
         parent::setUp();
         $this->adapter               = new FilesystemTagAwareAdapter('ses_test');
+        $this->adapter->clear();
         $this->coreParametersHelper  = $this->createMock(CoreParametersHelper::class);
         $this->container             = $this->createMock(ContainerInterface::class);
         $this->cacheProvider         = new CacheProvider($this->coreParametersHelper, $this->container);
@@ -115,11 +115,7 @@ class SesTransportTest extends \PHPUnit\Framework\TestCase
     {
         $this->configMock['enableTemplate'] = false;
         $transport                          = new SesTransport($this->dispatcherMock, $this->loggerMock, $this->cacheProvider, $this->configMock, $this->handlerMock);
-        $this->handlerMock->append(new Result(['SendQuota' => [
-        'Max24HourSend'   => 100,
-        'MaxSendRate'     => 100,
-        'SentLast24Hours' => 10,
-      ]]));
+
         $this->handlerMock->append(new AwsException('foo', new Command('sendEmail')));
         $this->handlerMock->append(new Result(['MessageId' => 'foo2']));
         $this->handlerMock->append(new Result(['MessageId' => 'foo3']));
@@ -136,13 +132,7 @@ class SesTransportTest extends \PHPUnit\Framework\TestCase
     {
         $this->configMock['enableTemplate'] = false;
         $transport                          = new SesTransport($this->dispatcherMock, $this->loggerMock, $this->cacheProvider, $this->configMock, $this->handlerMock);
-        //there will be a cache miss for the max send rate
-        //First Call is get Account
-        $this->handlerMock->append(new Result(['SendQuota' => [
-          'Max24HourSend'   => 100,
-          'MaxSendRate'     => 100,
-          'SentLast24Hours' => 10,
-        ]]));
+
         foreach (range(1, 3) as $i) {
             $this->handlerMock->append(new Result(['MessageId' => 'foo'.$i]));
         }
@@ -177,6 +167,51 @@ class SesTransportTest extends \PHPUnit\Framework\TestCase
         $this->assertStringContainsString('Subject: test-subject Third Lead', $cmd['Content']['Raw']['Data']);
         $this->assertStringContainsString('test-body Third Lead Unsubscribe3', $cmd['Content']['Raw']['Data']);
         $this->assertStringContainsString('<html><body><p>test-body Third Lead</p><p>Unsubscribe3</p></body></html>', $cmd['Content']['Raw']['Data']);
+    }
+
+    /**
+     * Send tokinized email, bulk send.
+     */
+    public function testSendTokenizedBulk(): void
+    {
+        $this->configMock['enableTemplate'] = true;
+        $transport                          = new SesTransport($this->dispatcherMock, $this->loggerMock, $this->cacheProvider, $this->configMock, $this->handlerMock);
+
+        //Second call is createEmailTemplate
+        $this->handlerMock->append(new Result([]));
+
+        //Third call is sendBulkEmail
+        $this->handlerMock->append(new Result([
+        'BulkEmailEntryResults' => [
+             [
+              'Error'    => '',
+              'MessageId'=> '1234',
+              'Status'   => 'SUCCESS',
+             ],
+             [
+              'Error'    => 'Message was rejected by Amazon SES.',
+              'MessageId'=> '',
+              'Status'   => 'MESSAGE_REJECTED',
+             ],
+             [
+              'Error'    => 'Your account has been throttled for sending too many emails. Please contact AWS Support to have the throttling limits for your account adjusted.',
+              'MessageId'=> '',
+              'Status'   => 'ACCOUNT_THROTTLED',
+             ],
+        ],
+      ]));
+
+        //Fourth call is deleteEmailTemplate
+        $this->handlerMock->append(new Result([]));
+
+        $this->expectException(TransportException::class);
+        $this->expectExceptionMessage('Unable to send an email: sendBulkEmail Exception: There are  2 partial failures .');
+
+        /**
+         * Send a tokinized message, it should be parsed and we should get a raw request
+         * We will match our last message.
+         */
+        $transport->send($this->makeTokenizedSentMessage());
     }
 
     private function makeTokenizedSentMessage(): MauticMessage

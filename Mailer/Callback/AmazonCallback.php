@@ -29,7 +29,7 @@ use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpKernel\Exception\HttpException;
 use Symfony\Contracts\Translation\TranslatorInterface;
 
-class AmazonCallback implements CallbackTransportInterface
+final class AmazonCallback implements CallbackTransportInterface
 {
     /**
      * From address for SNS email.
@@ -215,8 +215,6 @@ class AmazonCallback implements CallbackTransportInterface
      */
     public function getSnsPayload($body): array
     {
-        dd('sss');
-
         return json_decode(strtok($body, "\n"), true);
     }
 }
