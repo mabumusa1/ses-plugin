@@ -13,7 +13,7 @@ return function (ContainerConfigurator $configurator) {
         ->public();
 
     $excludes = [
-        'Mailer/Transport/SesTransport.php',
+        'Mailer/Transport/ScSesTransport.php',
     ];
     $services->set('mailer.transport_factory.sc_ses', \MauticPlugin\ScMailerSesBundle\Mailer\Transport\ScSesFactory::class)
     ->tag('mailer.transport_factory')
