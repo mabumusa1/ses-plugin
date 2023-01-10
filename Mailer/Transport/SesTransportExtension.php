@@ -33,7 +33,7 @@ class SesTransportExtension implements CallbackTransportInterface, TransportExte
 
     public function getSupportedSchemes(): array
     {
-        return ['ses+api'];
+        return ['sc+ses+api'];
     }
 
     public function processCallbackRequest(Request $request): void

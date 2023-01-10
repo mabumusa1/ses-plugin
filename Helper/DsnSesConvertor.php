@@ -17,7 +17,7 @@ class DsnSesConvertor
 {
     private const ALLOWED_OPTIONS = [
         'region',
-        'send_template',
+        'enableTemplate',
     ];
 
     /**
@@ -28,14 +28,14 @@ class DsnSesConvertor
     public static function convertArrayToDsnString(array $parameters): string
     {
         $dsn = new Dsn(
-            'ses+api',
+            'sc+ses+api',
             'default',
             $parameters['mailer_user'],
             $parameters['mailer_password'],
             null,
             [
-                'region'        => $parameters['mailer_option_region'],
-                'send_template' => $parameters['mailer_option_send_template'],
+                'region'         => $parameters['mailer_option_region'],
+                'enableTemplate' => $parameters['mailer_option_enableTemplate'],
             ]
         );
 

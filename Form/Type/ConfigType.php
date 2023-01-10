@@ -47,7 +47,7 @@ class ConfigType extends AbstractType
                 'required'    => true,
                 'attr'        => [
                     'class'        => 'form-control used-in-test',
-                    'data-show-on' => '{"config_emailconfig_mailer_transport":["ses+api"]}',
+                    'data-show-on' => '{"config_emailconfig_mailer_transport":["sc+ses+api"]}',
                     'tooltip'      => 'mautic.email.config.mailer.amazon_region.tooltip',
                     'onchange'     => 'Mautic.disableSendTestEmailButton()',
                 ],
@@ -56,17 +56,17 @@ class ConfigType extends AbstractType
         );
 
         $builder->add(
-            'mailer_option_send_template',
+            'mailer_option_enableTemplate',
             YesNoButtonGroupType::class,
             [
-                'label'      => 'mautic.email.config.mailer.send_template',
+                'label'      => 'mautic.email.config.mailer.enableTemplate',
                 'label_attr' => ['class' => 'control-label'],
                 'attr'       => [
                     'class'        => 'form-control used-in-test',
-                    'data-show-on' => '{"config_emailconfig_mailer_transport":["ses+api"]}',
-                    'tooltip'      => 'mautic.email.config.mailer.send_template.tooltip',
+                    'data-show-on' => '{"config_emailconfig_mailer_transport":["sc+ses+api"]}',
+                    'tooltip'      => 'mautic.email.config.mailer.enableTemplate.tooltip',
                 ],
-                'data'        => empty($options['data']['mailer_option_send_template']) ? false : true,
+                'data'        => empty($options['data']['mailer_option_enableTemplate']) ? false : true,
                 'required'    => true,
                 'empty_data'  => true,
             ]
