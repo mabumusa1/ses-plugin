@@ -180,7 +180,7 @@ final class ScSesTransport extends AbstractTokenArrayTransport implements TokenT
     }
 
     /**
-     * @param array<string> $failures
+     * @param array<string|int, mixed> $failures
      */
     private function processFailures(array $failures): void
     {
