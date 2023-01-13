@@ -10,6 +10,7 @@ use Aws\MockHandler;
 use Aws\Result;
 use Aws\SesV2\SesV2Client;
 use Doctrine\ORM\EntityManager;
+use Doctrine\Persistence\ObjectRepository;
 use Mautic\EmailBundle\Mailer\Message\MauticMessage;
 use MauticPlugin\ScMailerSesBundle\Entity\SesSetting;
 use MauticPlugin\ScMailerSesBundle\Mailer\Transport\ScSesTransport;
@@ -20,7 +21,7 @@ use Symfony\Component\Mailer\Header\MetadataHeader;
 use Symfony\Component\Mime\Address;
 use Symfony\Contracts\EventDispatcher\EventDispatcherInterface;
 
-class ScScSesTransportTest extends \PHPUnit\Framework\TestCase
+class ScSesTransportTest extends \PHPUnit\Framework\TestCase
 {
     /**
      * @var MockObject|EventDispatcherInterface
@@ -209,7 +210,28 @@ class ScScSesTransportTest extends \PHPUnit\Framework\TestCase
      */
     public function testSendTokenizedBulk(): void
     {
-        $transport                          = new ScSesTransport($this->emMock, $this->dispatcherMock, $this->loggerMock, $this->client, $this->sesSettingMock, true);
+        $repoMock    = $this->createMock(ObjectRepository::class);
+        $settingMock = $this->createMock(SesSetting::class);
+        $settingMock->expects($this->once())
+      ->method('getTemplates')
+      ->willReturn(['1']);
+
+        $repoMock->expects($this->any())
+            ->method('find')
+            ->willReturn($settingMock);
+
+        $this->emMock->expects($this->any())
+      ->method('getRepository')
+      ->willReturn($repoMock);
+
+        $settingMock->expects($this->once())
+      ->method('setTemplates')
+      ->with([
+        '1',
+        'MauticTemplate-3-146b18fd7cbd3055b76c78cefd133150',
+      ]);
+
+        $transport                          = new ScSesTransport($this->emMock, $this->dispatcherMock, $this->loggerMock, $this->client, $settingMock, true);
 
         //Second call is createEmailTemplate
         $this->handler->append(new Result([]));

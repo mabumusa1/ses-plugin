@@ -46,7 +46,7 @@ class SesSetting
         $builder
             ->setTable('plugin_ses_settings')
             ->addId()
-            ->addIndex(['access_key'], 'access_key')
+            ->addUniqueConstraint(['access_key'], 'access_key')
             ->addNamedField('accessKey', Types::STRING, 'access_key')
             ->addNamedField('maxSendRate', Types::INTEGER, 'max_send_rate')
             ->addNamedField('templates', Types::SIMPLE_ARRAY, 'templates', true);

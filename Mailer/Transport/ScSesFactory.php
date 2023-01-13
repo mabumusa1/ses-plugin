@@ -124,7 +124,6 @@ final class ScSesFactory implements TransportFactoryInterface
                 $this->logger->debug($e->getMessage());
                 $setting->setMaxSendRate(14);
             }
-
             $this->em->persist($setting);
             $this->em->flush();
         }

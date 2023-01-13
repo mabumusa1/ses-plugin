@@ -74,7 +74,7 @@ final class ScSesTransport extends AbstractTokenArrayTransport implements TokenT
              * Create an array of the tempaltes we want to create on SES
              * In case we are sending as templates.
              */
-            $this->templateCache = $setting->getTemplates();
+            $this->templateCache = $this->setting->getTemplates();
         }
     }
 
@@ -148,7 +148,6 @@ final class ScSesTransport extends AbstractTokenArrayTransport implements TokenT
                 $pool     = new CommandPool($this->client, $commands, [
                     'concurrency' => $this->setting->getMaxSendRate(),
                     'fulfilled'   => function (Result $result, $iteratorId) {
-                        $this->logger->debug('Fulfilled: with SES ID '.$result['MessageId']);
                     },
                     'rejected' => function (AwsException $reason, $iteratorId) use ($commands, &$failures) {
                         $data = $commands[$iteratorId]->toArray();
@@ -165,7 +164,6 @@ final class ScSesTransport extends AbstractTokenArrayTransport implements TokenT
                 $results  = $this->client->sendBulkEmail($payload)->toArray();
                 foreach ($results['BulkEmailEntryResults'] as $i => $result) {
                     if ('SUCCESS' != $result['Status']) {
-                        $this->logger->error('Exception sending email template: '.$result['Error']);
                         //Save the position of the response, it should match the position of the email in the payload
                         $failures[] = $i;
                     }
@@ -177,9 +175,6 @@ final class ScSesTransport extends AbstractTokenArrayTransport implements TokenT
             $code    = $exception->getStatusCode() ?: $exception->getCode();
             throw new TransportException(sprintf('Unable to send an email: %s (code %s).', $message, $code));
         } catch (\Exception $exception) {
-            //if("Undefined array key 1" == $exception->getMessage())
-            //dd($exception);
-
             throw new TransportException(sprintf('Unable to send an email: %s .', $exception->getMessage()));
         }
     }
@@ -256,9 +251,10 @@ final class ScSesTransport extends AbstractTokenArrayTransport implements TokenT
          */
         $this->templateCache[] = $templateName;
 
-        // Save it to the database
-        $this->setting->setTemplates($this->templateCache);
-        $this->em->persist($this->setting);
+        // always get the latest version
+        $setting = $this->em->getRepository(SesSetting::class)->find($this->setting->getId());
+        $setting->setTemplates($this->templateCache);
+        $this->em->persist($setting);
         $this->em->flush();
     }
 
