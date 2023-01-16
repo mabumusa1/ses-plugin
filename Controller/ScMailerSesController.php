@@ -68,6 +68,10 @@ class ScMailerSesController extends CommonController
             ],
         ];
 
+        if (!$request->get('objectId')) {
+            return $this->accessDenied();
+        }
+
         $objectId   = $request->get('objectId');
         $em         = $this->getDoctrine()->getManager();
         $repository = $em->getRepository(SesSetting::class);
