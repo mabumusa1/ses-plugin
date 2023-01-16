@@ -338,7 +338,7 @@ final class ScSesTransport extends AbstractTokenArrayTransport implements TokenT
                 $sentMessage   = clone $this->message;
                 $sentMessage->clearMetadata();
                 $sentMessage->updateLeadIdHash($mailData['hashId']);
-                $sentMessage->to(new Address($recipient, $mailData['name']));
+                $sentMessage->to(new Address($recipient, $mailData['name'] ?? ''));
                 MailHelper::searchReplaceTokens($mauticTokens, $mailData['tokens'], $sentMessage);
                 $this->addSesHeaders($payload, $sentMessage);
                 $payload['Destination']      = [
@@ -412,7 +412,7 @@ final class ScSesTransport extends AbstractTokenArrayTransport implements TokenT
             }
             $destinations[] = [
             'Destination' => [
-                'ToAddresses'  => $this->stringifyAddresses([new Address($recipient, $mailData['name'])]),
+                'ToAddresses'  => $this->stringifyAddresses([new Address($recipient, $mailData['name'] ?? '')]),
                 'CcAddresses'  => $this->stringifyAddresses($this->message->getCc()),
                 'BccAddresses' => $this->stringifyAddresses($this->message->getBcc()),
             ],
