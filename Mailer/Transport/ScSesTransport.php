@@ -195,12 +195,10 @@ final class ScSesTransport extends AbstractTokenArrayTransport implements TokenT
 
         //Add the metadata for the failed recipients
         foreach ($failures as $failure) {
-            try {
-                //add the email and metadata of the email
-                $this->message->addMetadata($failure, $metadata[$failure]);
-            } catch (\Exception $e) {
-                //if there is an excpetion, then it is a bulksend, use index
+            if (is_int($failure)) {
                 $this->message->addMetadata($keys[$failure], $metadata[$keys[$failure]]);
+            } else {
+                $this->message->addMetadata($failure, $metadata[$failure]);
             }
         }
         $this->logger->debug('There are partial failures, replacing metadata, and failing the message');
