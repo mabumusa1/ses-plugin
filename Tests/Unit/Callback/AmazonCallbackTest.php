@@ -202,6 +202,42 @@ PAYLOAD;
         $amazonCallback->processCallbackRequest($request);
     }
 
+    public function testProcessNotificationComplaintRequestFormatedName(): void
+    {
+        $payload = <<< 'PAYLOAD'
+{
+   "Type" : "Notification",
+   "MessageId" : "7c2d7069-7db3-53c8-87d0-20476a630fb6",
+   "TopicArn" : "arn:aws:sns:eu-west-1:918057160339:55hubs-mautic-test",
+   "Message": "{\"notificationType\":\"Complaint\", \"complaint\":{ \"complainedRecipients\":[ { \"emailAddress\":\"Someone <richard@example.com>\" } ], \"timestamp\":\"2016-01-27T14:59:38.237Z\", \"feedbackId\":\"0000013786031775-fea503bc-7497-49e1-881b-a0379bb037d3-000000\" } }",
+   "Timestamp" : "2016-08-17T07:43:12.822Z",
+   "SignatureVersion" : "1",
+   "Signature" : "GNWnMWfKx1PPDjUstq2Ln13+AJWEK/Qo8YllYC7dGSlPhC5nClop5+vCj0CG2XN7aN41GhsJJ1e+F4IiRxm9v2wwua6BC3mtykrXEi8VeGy2HuetbF9bEeBEPbtbeIyIXJhdPDhbs4anPJwcEiN/toCoANoPWJ3jyVTOaUAxJb2oPTrvmjMxMpVE59sSo7Mz2+pQaUJl3ma0UgAC/lrYghi6n4cwlDTfbbIW+mbV7/d/5YN/tjL9/sD3DOuf+1PpFFTPsOVseZWV8PQ0/MWB2BOrKOKQyF7msLNX5iTkmsvRrbYULPvpbx32LsIxfNVFZJmsnTe2/6EGaAXf3TVPZA==",
+   "SigningCertURL" : "https://sns.eu-west-1.amazonaws.com/SimpleNotificationService-bb750dd426d95ee9390147a5624348ee.pem",
+   "UnsubscribeURL" : "https://sns.eu-west-1.amazonaws.com/?Action=Unsubscribe&SubscriptionArn=arn:aws:sns:eu-west-1:918057160339:nope:1cddd2a6-bfa8-4eb5-b2b2-a7833eb5db9b"
+   }
+PAYLOAD;
+
+        $amazonCallback = new AmazonCallback($this->loggerMock, $this->httpMock, $this->translatorMock, $this->transportCallbackMock);
+
+        $request = $this->getMockBuilder(Request::class)
+       ->disableOriginalConstructor()
+       ->getMock();
+
+        $request->expects($this->any())
+           ->method('getContent')
+           ->will($this->returnValue($payload));
+
+        // Mock a successful response
+        $mockResponse       = $this->getMockBuilder(Response::class)->getMock();
+
+        $this->transportCallbackMock->expects($this->once())
+           ->method('addFailureByAddress')
+           ->with('richard@example.com');
+
+        $amazonCallback->processCallbackRequest($request);
+    }
+
     public function testProcessNotificationComplaintRequestConfigSet(): void
     {
         $payload = <<< 'PAYLOAD'
@@ -222,7 +258,8 @@ PAYLOAD;
         $mockResponse       = $this->getMockBuilder(Response::class)->getMock();
 
         $this->transportCallbackMock->expects($this->once())
-           ->method('addFailureByAddress');
+           ->method('addFailureByAddress')
+           ->with('recipient@example.com');
 
         $amazonCallback->processCallbackRequest($request);
     }

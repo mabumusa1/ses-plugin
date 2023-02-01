@@ -21,6 +21,7 @@ use Mautic\LeadBundle\Entity\DoNotContact;
 use Psr\Log\LoggerInterface;
 use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpKernel\Exception\HttpException;
+use Symfony\Component\Mime\Address;
 use Symfony\Contracts\Translation\TranslatorInterface;
 
 final class AmazonCallback implements CallbackTransportInterface
@@ -124,10 +125,10 @@ final class AmazonCallback implements CallbackTransportInterface
                                 break;
                         }
                     }
+                    $address = Address::create($complainedRecipient['emailAddress']);
+                    $this->transportCallback->addFailureByAddress($address->getAddress(), $reason, DoNotContact::UNSUBSCRIBED);
 
-                    $this->transportCallback->addFailureByAddress($complainedRecipient['emailAddress'], $reason, DoNotContact::UNSUBSCRIBED);
-
-                    $this->logger->debug("Unsubscribe email '".$complainedRecipient['emailAddress']."'");
+                    $this->logger->debug("Unsubscribe email '".$address->getAddress()."'");
                 }
 
                 break;
@@ -148,7 +149,8 @@ final class AmazonCallback implements CallbackTransportInterface
                     foreach ($bouncedRecipients as $bouncedRecipient) {
                         $bounceCode =  array_key_exists('diagnosticCode', $bouncedRecipient) ? $bouncedRecipient['diagnosticCode'] : 'unknown';
                         $bounceCode .= ' AWS bounce type: '.$payload['bounce']['bounceSubType'];
-                        $this->transportCallback->addFailureByAddress($bouncedRecipient['emailAddress'], $bounceCode, DoNotContact::BOUNCED, $emailId);
+                        $address = Address::create($bouncedRecipient['emailAddress']);
+                        $this->transportCallback->addFailureByAddress($address->getAddress(), $bounceCode, DoNotContact::BOUNCED, $emailId);
                         $this->logger->debug("Mark email '".$bouncedRecipient['emailAddress']."' as bounced, reason: ".$bounceCode);
                     }
                 }
