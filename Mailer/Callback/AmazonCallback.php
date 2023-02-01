@@ -98,7 +98,12 @@ final class AmazonCallback implements CallbackTransportInterface
                     break;
 
             case 'Notification':
-                $message = json_decode($payload['Message'], true);
+                try {
+                    $message = json_decode($payload['Message'], true);
+                }catch(\Exception $e){
+                    $this->logger->error('AmazonCallback: Invalid Notification JSON Payload');
+                    throw new HttpException(400, 'AmazonCallback: Invalid Notification JSON Payload');
+                }                
 
                 $this->processJsonPayload($message, $message['notificationType']);
                 break;
