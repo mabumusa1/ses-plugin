@@ -51,7 +51,13 @@ final class AmazonCallback implements CallbackTransportInterface
      */
     public function processCallbackRequest(Request $request): void
     {
-        $payload = json_decode($request->getContent(), true);
+        try {
+            $payload = json_decode($request->getContent(), true);
+        }catch(\Exception $e){
+            $this->logger->error('AmazonCallback: Invalid JSON Payload');
+            throw new HttpException(400, 'AmazonCallback: Invalid JSON Payload');
+        }
+
         $type    = '';
 
         if (0 !== json_last_error()) {
