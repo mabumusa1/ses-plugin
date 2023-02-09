@@ -72,6 +72,7 @@ PAYLOAD;
            ->will($this->returnValue($payload));
 
         $this->expectException(HttpException::class);
+        $this->expectExceptionMessage('AmazonCallback: Invalid JSON Payload');
 
         $amazonCallback->processCallbackRequest($request);
     }
@@ -95,6 +96,40 @@ PAYLOAD;
            ->will($this->returnValue($payload));
 
         $this->expectException(HttpException::class);
+        $this->expectExceptionMessage('Key \'Type\' not found in payload');
+
+        $amazonCallback->processCallbackRequest($request);
+    }
+
+    public function testProcessValidJsonWithWrongMessage(): void
+    {
+        $payload = <<< 'PAYLOAD'
+{
+   "Type" : "Notification",
+   "MessageId" : "7c2d7069-7db3-53c8-87d0-20476a630fb6",
+   "TopicArn" : "arn:aws:sns:eu-west-1:918057160339:55hubs-mautic-test",
+   "Message" : "I AM NOT VALID JSON",
+   "Timestamp" : "2016-08-17T07:43:12.822Z",
+   "SignatureVersion" : "1",
+   "Signature" : "GNWnMWfKx1PPDjUstq2Ln13+AJWEK/Qo8YllYC7dGSlPhC5nClop5+vCj0CG2XN7aN41GhsJJ1e+F4IiRxm9v2wwua6BC3mtykrXEi8VeGy2HuetbF9bEeBEPbtbeIyIXJhdPDhbs4anPJwcEiN/toCoANoPWJ3jyVTOaUAxJb2oPTrvmjMxMpVE59sSo7Mz2+pQaUJl3ma0UgAC/lrYghi6n4cwlDTfbbIW+mbV7/d/5YN/tjL9/sD3DOuf+1PpFFTPsOVseZWV8PQ0/MWB2BOrKOKQyF7msLNX5iTkmsvRrbYULPvpbx32LsIxfNVFZJmsnTe2/6EGaAXf3TVPZA==",
+   "SigningCertURL" : "https://sns.eu-west-1.amazonaws.com/SimpleNotificationService-bb750dd426d95ee9390147a5624348ee.pem",
+   "UnsubscribeURL" : "https://sns.eu-west-1.amazonaws.com/?Action=Unsubscribe&SubscriptionArn=arn:aws:sns:eu-west-1:918057160339:nope:1cddd2a6-bfa8-4eb5-b2b2-a7833eb5db9b"
+   
+}
+PAYLOAD;
+
+        $amazonCallback = new AmazonCallback($this->loggerMock, $this->httpMock, $this->translatorMock, $this->transportCallbackMock);
+
+        $request = $this->getMockBuilder(Request::class)
+       ->disableOriginalConstructor()
+       ->getMock();
+
+        $request->expects($this->any())
+           ->method('getContent')
+           ->will($this->returnValue($payload));
+
+        $this->expectException(HttpException::class);
+        $this->expectExceptionMessage('AmazonCallback: Invalid Notification JSON Payload');
 
         $amazonCallback->processCallbackRequest($request);
     }
@@ -133,7 +168,7 @@ PAYLOAD;
         $amazonCallback->processCallbackRequest($request);
     }
 
-    public function testProcessNotificationBounceRequest(): void
+    public function testProcessNotificationBounceRequestWithoutHeaders(): void
     {
         $payload = <<< 'PAYLOAD'
 {
@@ -162,7 +197,43 @@ PAYLOAD;
         // Mock a successful response
         $mockResponse       = $this->getMockBuilder(Response::class)->getMock();
         $this->transportCallbackMock->expects($this->once())
-           ->method('addFailureByAddress');
+           ->method('addFailureByAddress')
+           ->with('nope@nope.com', 'smtp; 550 5.1.1 <nope@nope.com>: Recipient address rejected: User unknown in virtual alias table AWS bounce type: General', 2, null);
+
+        $amazonCallback->processCallbackRequest($request);
+    }
+
+    public function testProcessNotificationBounceRequestWithHeaders(): void
+    {
+        $payload = <<< 'PAYLOAD'
+{
+   "Type" : "Notification",
+   "MessageId" : "7c2d7069-7db3-53c8-87d0-20476a630fb6",
+   "TopicArn" : "arn:aws:sns:eu-west-1:918057160339:55hubs-mautic-test",
+   "Message" : "{\"notificationType\":\"Bounce\",\"bounce\":{\"bounceType\":\"Permanent\",\"bounceSubType\":\"General\",\"bouncedRecipients\":[{\"emailAddress\":\"nope@nope.com\",\"action\":\"failed\",\"status\":\"5.1.1\",\"diagnosticCode\":\"smtp; 550 5.1.1 <nope@nope.com>: Recipient address rejected: User unknown in virtual alias table\"}],\"timestamp\":\"2016-08-17T07:43:12.776Z\",\"feedbackId\":\"0102015697743d4c-619f1aa8-763f-4bea-8648-0b3bbdedd1ea-000000\",\"reportingMTA\":\"dsn; a4-24.smtp-out.eu-west-1.amazonses.com\"},\"mail\":{\"timestamp\":\"2016-08-17T07:43:11.000Z\",\"source\":\"admin@55hubs.ch\",\"sourceArn\":\"arn:aws:ses:eu-west-1:918057160339:identity/nope.com\",\"sendingAccountId\":\"918057160339\",\"messageId\":\"010201569774384f-81311784-10dd-48a8-921f-8316c145e64d-000000\",\"destination\":[\"nope@nope.com\"], \"headersTruncated\":false,\"headers\":[{\"name\":\"Reply-To\",\"value\":\"source@domain.com\"},{\"name\":\"To\",\"value\":\"email@domain.com\"},{\"name\":\"From\",\"value\":\"source@domain.com\"},{\"name\":\"Subject\",\"value\":\"subject\"},{\"name\":\"Precedence\",\"value\":\"Bulk\"},{\"name\":\"X-EMAIL-ID\",\"value\":\"65\"},{\"name\":\"List-Unsubscribe\",\"value\":\"<https:\\\/\\\/domain.com\\\/email\\\/unsubscribe\\\/63e00de16a639409596120>\"},{\"name\":\"MIME-Version\",\"value\":\"1.0\"},{\"name\":\"Date\",\"value\":\"Sun, 05 Feb 2023 20:13:21 +0000\"},{\"name\":\"Message-ID\",\"value\":\"<ac8b9862bc9a612c32d9d44333c3e30e@domain.com>\"},{\"name\":\"Content-Type\",\"value\":\"multipart\\\/alternative; boundary=el0uD1Lz\"}],\"commonHeaders\":{\"from\":[\"source@domain.com\"],\"replyTo\":[\"source@domain.com\"],\"date\":\"Sun, 05 Feb 2023 20:13:21 +0000\",\"to\":[\"email@domain.com\"],\"messageId\":\"<ac8b9862bc9a612c32d9d44333c3e30e@domain.com>\",\"subject\":\"subject\"}}}",
+   "Timestamp" : "2016-08-17T07:43:12.822Z",
+   "SignatureVersion" : "1",
+   "Signature" : "GNWnMWfKx1PPDjUstq2Ln13+AJWEK/Qo8YllYC7dGSlPhC5nClop5+vCj0CG2XN7aN41GhsJJ1e+F4IiRxm9v2wwua6BC3mtykrXEi8VeGy2HuetbF9bEeBEPbtbeIyIXJhdPDhbs4anPJwcEiN/toCoANoPWJ3jyVTOaUAxJb2oPTrvmjMxMpVE59sSo7Mz2+pQaUJl3ma0UgAC/lrYghi6n4cwlDTfbbIW+mbV7/d/5YN/tjL9/sD3DOuf+1PpFFTPsOVseZWV8PQ0/MWB2BOrKOKQyF7msLNX5iTkmsvRrbYULPvpbx32LsIxfNVFZJmsnTe2/6EGaAXf3TVPZA==",
+   "SigningCertURL" : "https://sns.eu-west-1.amazonaws.com/SimpleNotificationService-bb750dd426d95ee9390147a5624348ee.pem",
+   "UnsubscribeURL" : "https://sns.eu-west-1.amazonaws.com/?Action=Unsubscribe&SubscriptionArn=arn:aws:sns:eu-west-1:918057160339:nope:1cddd2a6-bfa8-4eb5-b2b2-a7833eb5db9b"
+}
+PAYLOAD;
+
+        $amazonCallback = new AmazonCallback($this->loggerMock, $this->httpMock, $this->translatorMock, $this->transportCallbackMock);
+
+        $request = $this->getMockBuilder(Request::class)
+       ->disableOriginalConstructor()
+       ->getMock();
+
+        $request->expects($this->any())
+           ->method('getContent')
+           ->will($this->returnValue($payload));
+
+        // Mock a successful response
+        $mockResponse       = $this->getMockBuilder(Response::class)->getMock();
+        $this->transportCallbackMock->expects($this->once())
+           ->method('addFailureByAddress')
+           ->with('nope@nope.com', 'smtp; 550 5.1.1 <nope@nope.com>: Recipient address rejected: User unknown in virtual alias table AWS bounce type: General', 2, 65);
 
         $amazonCallback->processCallbackRequest($request);
     }
@@ -174,7 +245,83 @@ PAYLOAD;
    "Type" : "Notification",
    "MessageId" : "7c2d7069-7db3-53c8-87d0-20476a630fb6",
    "TopicArn" : "arn:aws:sns:eu-west-1:918057160339:55hubs-mautic-test",
-   "Message": "{\"notificationType\":\"Complaint\", \"complaint\":{ \"complainedRecipients\":[ { \"emailAddress\":\"richard@example.com\" } ], \"timestamp\":\"2016-01-27T14:59:38.237Z\", \"feedbackId\":\"0000013786031775-fea503bc-7497-49e1-881b-a0379bb037d3-000000\" } }",
+   "Message": "{\"notificationType\":\"Complaint\", \"complaint\":{ \"complainedRecipients\":[ { \"emailAddress\":\"richard@example.com\" } ], \"complaintSubType\":null, \"timestamp\":\"2016-01-27T14:59:38.237Z\", \"feedbackId\":\"0000013786031775-fea503bc-7497-49e1-881b-a0379bb037d3-000000\" } }",
+   "Timestamp" : "2016-08-17T07:43:12.822Z",
+   "SignatureVersion" : "1",
+   "Signature" : "GNWnMWfKx1PPDjUstq2Ln13+AJWEK/Qo8YllYC7dGSlPhC5nClop5+vCj0CG2XN7aN41GhsJJ1e+F4IiRxm9v2wwua6BC3mtykrXEi8VeGy2HuetbF9bEeBEPbtbeIyIXJhdPDhbs4anPJwcEiN/toCoANoPWJ3jyVTOaUAxJb2oPTrvmjMxMpVE59sSo7Mz2+pQaUJl3ma0UgAC/lrYghi6n4cwlDTfbbIW+mbV7/d/5YN/tjL9/sD3DOuf+1PpFFTPsOVseZWV8PQ0/MWB2BOrKOKQyF7msLNX5iTkmsvRrbYULPvpbx32LsIxfNVFZJmsnTe2/6EGaAXf3TVPZA==",
+   "SigningCertURL" : "https://sns.eu-west-1.amazonaws.com/SimpleNotificationService-bb750dd426d95ee9390147a5624348ee.pem",
+   "UnsubscribeURL" : "https://sns.eu-west-1.amazonaws.com/?Action=Unsubscribe&SubscriptionArn=arn:aws:sns:eu-west-1:918057160339:nope:1cddd2a6-bfa8-4eb5-b2b2-a7833eb5db9b"
+   }
+PAYLOAD;
+
+        $amazonCallback = new AmazonCallback($this->loggerMock, $this->httpMock, $this->translatorMock, $this->transportCallbackMock);
+
+        $request = $this->getMockBuilder(Request::class)
+       ->disableOriginalConstructor()
+       ->getMock();
+
+        $request->expects($this->any())
+           ->method('getContent')
+           ->will($this->returnValue($payload));
+
+        // Mock a successful response
+        $mockResponse       = $this->getMockBuilder(Response::class)->getMock();
+
+        $this->translatorMock->expects($this->once())->method('trans')->willReturn('Some Error');
+
+        $this->transportCallbackMock->expects($this->once())
+           ->method('addFailureByAddress')
+           ->with('richard@example.com', 'Some Error', 1, null);
+
+        $amazonCallback->processCallbackRequest($request);
+    }
+
+    public function testProcessNotificationComplaintRequestWithHeaders(): void
+    {
+        $payload = <<< 'PAYLOAD'
+{
+   "Type" : "Notification",
+   "MessageId" : "7c2d7069-7db3-53c8-87d0-20476a630fb6",
+   "TopicArn" : "arn:aws:sns:eu-west-1:918057160339:55hubs-mautic-test",
+   "Message": "{\"notificationType\":\"Complaint\", \"complaint\":{ \"complainedRecipients\":[ { \"emailAddress\":\"richard@example.com\" } ], \"complaintSubType\":null, \"timestamp\":\"2016-01-27T14:59:38.237Z\", \"feedbackId\":\"0000013786031775-fea503bc-7497-49e1-881b-a0379bb037d3-000000\"}, \"mail\": {\"headersTruncated\":false,\"headers\":[{\"name\":\"Reply-To\",\"value\":\"source@domain.com\"},{\"name\":\"To\",\"value\":\"email@domain.com\"},{\"name\":\"From\",\"value\":\"source@domain.com\"},{\"name\":\"Subject\",\"value\":\"subject\"},{\"name\":\"Precedence\",\"value\":\"Bulk\"},{\"name\":\"X-EMAIL-ID\",\"value\":\"65\"},{\"name\":\"List-Unsubscribe\",\"value\":\"<https:\\\/\\\/domain.com\\\/email\\\/unsubscribe\\\/63e00de16a639409596120>\"},{\"name\":\"MIME-Version\",\"value\":\"1.0\"},{\"name\":\"Date\",\"value\":\"Sun, 05 Feb 2023 20:13:21 +0000\"},{\"name\":\"Message-ID\",\"value\":\"<ac8b9862bc9a612c32d9d44333c3e30e@domain.com>\"},{\"name\":\"Content-Type\",\"value\":\"multipart\\\/alternative; boundary=el0uD1Lz\"}],\"commonHeaders\":{\"from\":[\"source@domain.com\"],\"replyTo\":[\"source@domain.com\"],\"date\":\"Sun, 05 Feb 2023 20:13:21 +0000\",\"to\":[\"email@domain.com\"],\"messageId\":\"<ac8b9862bc9a612c32d9d44333c3e30e@domain.com>\",\"subject\":\"subject\"}}}",
+   "Timestamp" : "2016-08-17T07:43:12.822Z",
+   "SignatureVersion" : "1",
+   "Signature" : "GNWnMWfKx1PPDjUstq2Ln13+AJWEK/Qo8YllYC7dGSlPhC5nClop5+vCj0CG2XN7aN41GhsJJ1e+F4IiRxm9v2wwua6BC3mtykrXEi8VeGy2HuetbF9bEeBEPbtbeIyIXJhdPDhbs4anPJwcEiN/toCoANoPWJ3jyVTOaUAxJb2oPTrvmjMxMpVE59sSo7Mz2+pQaUJl3ma0UgAC/lrYghi6n4cwlDTfbbIW+mbV7/d/5YN/tjL9/sD3DOuf+1PpFFTPsOVseZWV8PQ0/MWB2BOrKOKQyF7msLNX5iTkmsvRrbYULPvpbx32LsIxfNVFZJmsnTe2/6EGaAXf3TVPZA==",
+   "SigningCertURL" : "https://sns.eu-west-1.amazonaws.com/SimpleNotificationService-bb750dd426d95ee9390147a5624348ee.pem",
+   "UnsubscribeURL" : "https://sns.eu-west-1.amazonaws.com/?Action=Unsubscribe&SubscriptionArn=arn:aws:sns:eu-west-1:918057160339:nope:1cddd2a6-bfa8-4eb5-b2b2-a7833eb5db9b"
+   }
+PAYLOAD;
+
+        $amazonCallback = new AmazonCallback($this->loggerMock, $this->httpMock, $this->translatorMock, $this->transportCallbackMock);
+
+        $request = $this->getMockBuilder(Request::class)
+       ->disableOriginalConstructor()
+       ->getMock();
+
+        $request->expects($this->any())
+           ->method('getContent')
+           ->will($this->returnValue($payload));
+
+        // Mock a successful response
+        $mockResponse       = $this->getMockBuilder(Response::class)->getMock();
+
+        $this->translatorMock->expects($this->once())->method('trans')->willReturn('Some Error');
+
+        $this->transportCallbackMock->expects($this->once())
+           ->method('addFailureByAddress')
+           ->with('richard@example.com', 'Some Error', 1, 65);
+
+        $amazonCallback->processCallbackRequest($request);
+    }
+
+    public function testProcessNotificationComplaintRequestWithComplaintSubType(): void
+    {
+        $payload = <<< 'PAYLOAD'
+{
+   "Type" : "Notification",
+   "MessageId" : "7c2d7069-7db3-53c8-87d0-20476a630fb6",
+   "TopicArn" : "arn:aws:sns:eu-west-1:918057160339:55hubs-mautic-test",
+   "Message": "{\"notificationType\":\"Complaint\", \"complaint\":{ \"complainedRecipients\":[ { \"emailAddress\":\"richard@example.com\" } ], \"complaintSubType\":\"complaintSubType\", \"timestamp\":\"2016-01-27T14:59:38.237Z\", \"feedbackId\":\"0000013786031775-fea503bc-7497-49e1-881b-a0379bb037d3-000000\"}, \"mail\": {\"headersTruncated\":false,\"headers\":[{\"name\":\"Reply-To\",\"value\":\"source@domain.com\"},{\"name\":\"To\",\"value\":\"email@domain.com\"},{\"name\":\"From\",\"value\":\"source@domain.com\"},{\"name\":\"Subject\",\"value\":\"subject\"},{\"name\":\"Precedence\",\"value\":\"Bulk\"},{\"name\":\"X-EMAIL-ID\",\"value\":\"65\"},{\"name\":\"List-Unsubscribe\",\"value\":\"<https:\\\/\\\/domain.com\\\/email\\\/unsubscribe\\\/63e00de16a639409596120>\"},{\"name\":\"MIME-Version\",\"value\":\"1.0\"},{\"name\":\"Date\",\"value\":\"Sun, 05 Feb 2023 20:13:21 +0000\"},{\"name\":\"Message-ID\",\"value\":\"<ac8b9862bc9a612c32d9d44333c3e30e@domain.com>\"},{\"name\":\"Content-Type\",\"value\":\"multipart\\\/alternative; boundary=el0uD1Lz\"}],\"commonHeaders\":{\"from\":[\"source@domain.com\"],\"replyTo\":[\"source@domain.com\"],\"date\":\"Sun, 05 Feb 2023 20:13:21 +0000\",\"to\":[\"email@domain.com\"],\"messageId\":\"<ac8b9862bc9a612c32d9d44333c3e30e@domain.com>\",\"subject\":\"subject\"}}}",
    "Timestamp" : "2016-08-17T07:43:12.822Z",
    "SignatureVersion" : "1",
    "Signature" : "GNWnMWfKx1PPDjUstq2Ln13+AJWEK/Qo8YllYC7dGSlPhC5nClop5+vCj0CG2XN7aN41GhsJJ1e+F4IiRxm9v2wwua6BC3mtykrXEi8VeGy2HuetbF9bEeBEPbtbeIyIXJhdPDhbs4anPJwcEiN/toCoANoPWJ3jyVTOaUAxJb2oPTrvmjMxMpVE59sSo7Mz2+pQaUJl3ma0UgAC/lrYghi6n4cwlDTfbbIW+mbV7/d/5YN/tjL9/sD3DOuf+1PpFFTPsOVseZWV8PQ0/MWB2BOrKOKQyF7msLNX5iTkmsvRrbYULPvpbx32LsIxfNVFZJmsnTe2/6EGaAXf3TVPZA==",
@@ -197,7 +344,8 @@ PAYLOAD;
         $mockResponse       = $this->getMockBuilder(Response::class)->getMock();
 
         $this->transportCallbackMock->expects($this->once())
-           ->method('addFailureByAddress');
+           ->method('addFailureByAddress')
+           ->with('richard@example.com', 'complaintSubType', 1, 65);
 
         $amazonCallback->processCallbackRequest($request);
     }

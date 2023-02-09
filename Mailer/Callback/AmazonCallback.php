@@ -52,8 +52,8 @@ final class AmazonCallback implements CallbackTransportInterface
     public function processCallbackRequest(Request $request): void
     {
         try {
-            $payload = json_decode($request->getContent(), true);
-        }catch(\Exception $e){
+            $payload = json_decode($request->getContent(), true, 512, JSON_THROW_ON_ERROR);
+        } catch (\Exception $e) {
             $this->logger->error('AmazonCallback: Invalid JSON Payload');
             throw new HttpException(400, 'AmazonCallback: Invalid JSON Payload');
         }
@@ -69,7 +69,7 @@ final class AmazonCallback implements CallbackTransportInterface
         } elseif (array_key_exists('eventType', $payload)) {
             $type = $payload['eventType'];
         } else {
-            throw new HttpException(400, "Key 'Type' not found in payload ");
+            throw new HttpException(400, "Key 'Type' not found in payload");
         }
 
         $this->processJsonPayload($payload, $type);
@@ -99,11 +99,11 @@ final class AmazonCallback implements CallbackTransportInterface
 
             case 'Notification':
                 try {
-                    $message = json_decode($payload['Message'], true);
-                }catch(\Exception $e){
+                    $message = json_decode($payload['Message'], true, 512, JSON_THROW_ON_ERROR);
+                } catch (\Exception $e) {
                     $this->logger->error('AmazonCallback: Invalid Notification JSON Payload');
                     throw new HttpException(400, 'AmazonCallback: Invalid Notification JSON Payload');
-                }                
+                }
 
                 $this->processJsonPayload($message, $message['notificationType']);
                 break;
@@ -136,8 +136,27 @@ final class AmazonCallback implements CallbackTransportInterface
                                 break;
                         }
                     }
+
+                    if (null === $reason) {
+                        if (empty($payload['complaint']['complaintSubType'])) {
+                            $reason = $this->translator->trans('mautic.plugin.scmailerses.complaint.reason.unknown');
+                        } else {
+                            $reason = $payload['complaint']['complaintSubType'];
+                        }
+                    }
+
+                    $emailId = null;
+
+                    if (isset($payload['mail']['headers'])) {
+                        foreach ($payload['mail']['headers'] as $header) {
+                            if ('X-EMAIL-ID' === $header['name']) {
+                                $emailId = $header['value'];
+                            }
+                        }
+                    }
+
                     $address = Address::create($complainedRecipient['emailAddress']);
-                    $this->transportCallback->addFailureByAddress($address->getAddress(), $reason, DoNotContact::UNSUBSCRIBED);
+                    $this->transportCallback->addFailureByAddress($address->getAddress(), $reason, DoNotContact::UNSUBSCRIBED, $emailId);
 
                     $this->logger->debug("Unsubscribe email '".$address->getAddress()."'");
                 }
@@ -170,7 +189,6 @@ final class AmazonCallback implements CallbackTransportInterface
                 $this->logger->warning('Received SES webhook of type '.$payload['Type']." but couldn't understand payload");
                 $this->logger->debug('SES webhook payload: '.json_encode($payload));
                 throw new HttpException(400, "Received SES webhook of type '$payload[Type]' but couldn't understand payload");
-                break;
         }
     }
 }
