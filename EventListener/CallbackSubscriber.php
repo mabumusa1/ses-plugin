@@ -1,30 +1,21 @@
 <?php
 
-/*
-* @copyright   2022 Steer Campaign. All rights reserved
-* @author      Steer Campaign <m.abumusa@steercampaign.com>
-*
-* @link        https://steercampaign.com
-*
-*/
-
-declare(strict_types=1);
-
-namespace MauticPlugin\ScMailerSesBundle\Mailer\Callback;
+namespace MauticPlugin\ScMailerSesBundle\EventListener;
 
 use GuzzleHttp\Client;
 use GuzzleHttp\Exception\TransferException;
-use Mautic\EmailBundle\Mailer\Transport\CallbackTransportInterface;
+use Mautic\EmailBundle\EmailEvents;
 use Mautic\EmailBundle\Model\TransportCallback;
 use Mautic\EmailBundle\MonitoredEmail\Processor\Bounce\Definition\Type;
 use Mautic\LeadBundle\Entity\DoNotContact;
 use Psr\Log\LoggerInterface;
+use Symfony\Component\EventDispatcher\EventSubscriberInterface;
 use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpKernel\Exception\HttpException;
 use Symfony\Component\Mime\Address;
 use Symfony\Contracts\Translation\TranslatorInterface;
 
-final class AmazonCallback implements CallbackTransportInterface
+class CallbackSubscriber implements EventSubscriberInterface
 {
     private LoggerInterface $logger;
 
@@ -44,6 +35,16 @@ final class AmazonCallback implements CallbackTransportInterface
         $this->httpClient        = $httpClient;
         $this->translator        = $translator;
         $this->transportCallback = $transportCallback;
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    public static function getSubscribedEvents(): array
+    {
+        return [
+            EmailEvents::ON_TRANSPORT_WEBHOOK => ['processCallbackRequest', 0],
+        ];
     }
 
     /**
@@ -86,16 +87,16 @@ final class AmazonCallback implements CallbackTransportInterface
     {
         switch ($type) {
             case 'SubscriptionConfirmation':
-                    // Confirm Amazon SNS subscription by calling back the SubscribeURL from the playload
-                    try {
-                        $response = $this->httpClient->get($payload['SubscribeURL']);
-                        if (200 == $response->getStatusCode()) {
-                            $this->logger->info('Callback to SubscribeURL from Amazon SNS successfully');
-                        }
-                    } catch (TransferException $e) {
-                        $this->logger->error('Callback to SubscribeURL from Amazon SNS failed, reason: '.$e->getMessage());
+                // Confirm Amazon SNS subscription by calling back the SubscribeURL from the playload
+                try {
+                    $response = $this->httpClient->get($payload['SubscribeURL']);
+                    if (200 == $response->getStatusCode()) {
+                        $this->logger->info('Callback to SubscribeURL from Amazon SNS successfully');
                     }
-                    break;
+                } catch (TransferException $e) {
+                    $this->logger->error('Callback to SubscribeURL from Amazon SNS failed, reason: '.$e->getMessage());
+                }
+                break;
 
             case 'Notification':
                 try {

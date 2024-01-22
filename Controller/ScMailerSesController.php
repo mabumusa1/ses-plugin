@@ -40,7 +40,7 @@ class ScMailerSesController extends CommonController
                 'viewParameters' => [
                     'items'       => $settings,
                 ],
-                'contentTemplate' => 'ScMailerSesBundle:Show:index.html.twig',
+                'contentTemplate' => '@ScMailerSes/Show/index.html.twig',
                 'passthroughVars' => [
                 ],
             ]

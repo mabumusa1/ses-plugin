@@ -1,4 +1,4 @@
-{% extends 'MauticCoreBundle:Default:content.html.twig' %}
+{% extends '@MauticCore/Default/content.html.twig' %}
 {% block headerTitle %}{% trans %}plugin.scmailerses.header.index{% endtrans %}{% endblock %}
 
 {% block content %}    
@@ -19,7 +19,7 @@
             <th class="visible-md visible-lg">{{ 'plugin.scmailerses.thead.maxRate'|trans }}</th>
             <th class="visible-md visible-lg">{{ 'plugin.scmailerses.thead.templates'|trans }}</th>
             {{- include(
-                'MauticCoreBundle:Helper:tableheader.html.twig',
+                '@MauticCore/Helper/tableheader.html.twig',
                 {
                     'sessionVar' : 'setting',
                     'orderBy'    : 'c.id',
@@ -36,13 +36,13 @@
             <tr>
                 <td>
                     {{- include(
-                        'MauticCoreBundle:Helper:list_actions.html.twig',
+                        '@MauticCore/Helper/list_actions.html.twig',
                         {
                             'item'            : item,
                             'templateButtons' : {
                                 'delete' : true,
                             },
-                            'actionRoute' : 'plugin_scmailerses_delete',                            
+                            'actionRoute' : 'plugin_scmailerses_delete',
                             'langVar'   : 'plugin.scmailerses',
                             'pull'      : 'left',
                         }

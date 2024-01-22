@@ -150,7 +150,7 @@ final class ScSesTransport extends AbstractTokenArrayTransport implements TokenT
                     'fulfilled'   => function (Result $result, $iteratorId) {
                     },
                     'rejected' => function (AwsException $reason, $iteratorId) use ($commands, &$failures) {
-                        $data = $commands[$iteratorId]->toArray();
+                        $data   = $commands[$iteratorId]->toArray();
                         $failed = Address::create($data['Destination']['ToAddresses'][0]);
                         array_push($failures, $failed->getAddress());
                         $this->logger->debug('Rejected: message to '.implode(',', $data['Destination']['ToAddresses']).' with reason '.$reason->getMessage());
@@ -164,7 +164,7 @@ final class ScSesTransport extends AbstractTokenArrayTransport implements TokenT
                 $results  = $this->client->sendBulkEmail($payload)->toArray();
                 foreach ($results['BulkEmailEntryResults'] as $i => $result) {
                     if ('SUCCESS' != $result['Status']) {
-                        //Save the position of the response, it should match the position of the email in the payload
+                        // Save the position of the response, it should match the position of the email in the payload
                         $failures[] = $i;
                     }
                 }
@@ -187,13 +187,13 @@ final class ScSesTransport extends AbstractTokenArrayTransport implements TokenT
         if (empty($failures)) {
             return;
         }
-        //Make a copy of the metadata
+        // Make a copy of the metadata
         $metadata = $this->getMetadata();
         $keys     = array_keys($metadata);
-        //Clear the metadata
+        // Clear the metadata
         $this->message->clearMetadata();
 
-        //Add the metadata for the failed recipients
+        // Add the metadata for the failed recipients
         foreach ($failures as $failure) {
             if (is_int($failure)) {
                 $this->message->addMetadata($keys[$failure], $metadata[$keys[$failure]]);
@@ -235,13 +235,13 @@ final class ScSesTransport extends AbstractTokenArrayTransport implements TokenT
             $this->client->createEmailTemplate($template);
         } catch (AwsException $e) {
             switch ($e->getAwsErrorCode()) {
-            case 'AlreadyExistsException':
-                $this->logger->debug('Exception creating template: '.$templateName.', '.$e->getAwsErrorCode().', '.$e->getAwsErrorMessage().', ignoring');
-                break;
-            default:
-                $this->logger->error('Exception creating template: '.$templateName.', '.$e->getAwsErrorCode().', '.$e->getAwsErrorMessage());
-                $this->throwException('Exception creating template: '.$templateName.', '.$e->getAwsErrorCode().', '.$e->getAwsErrorMessage());
-        }
+                case 'AlreadyExistsException':
+                    $this->logger->debug('Exception creating template: '.$templateName.', '.$e->getAwsErrorCode().', '.$e->getAwsErrorMessage().', ignoring');
+                    break;
+                default:
+                    $this->logger->error('Exception creating template: '.$templateName.', '.$e->getAwsErrorCode().', '.$e->getAwsErrorMessage());
+                    $this->throwException('Exception creating template: '.$templateName.', '.$e->getAwsErrorCode().', '.$e->getAwsErrorMessage());
+            }
         }
 
         /*
@@ -358,9 +358,9 @@ final class ScSesTransport extends AbstractTokenArrayTransport implements TokenT
     /**
      * Create the template payload for the AWS SES API.
      *
-     * @throws TransportException
-     *
      * @return array<int, array<string, mixed>>
+     *
+     * @throws TransportException
      */
     public function makeTemplateAndMessagePayload(): array
     {
@@ -376,7 +376,7 @@ final class ScSesTransport extends AbstractTokenArrayTransport implements TokenT
         $mauticTokens = array_keys($tokens);
         $tokenReplace = $amazonTokens = [];
 
-        //Convert Mautic Tokens to Amazon SES tokens
+        // Convert Mautic Tokens to Amazon SES tokens
         foreach ($tokens as $search => $token) {
             $tokenKey              = preg_replace('/[^\da-z]/i', '_', trim($search, '{}'));
             $tokenReplace[$search] = '{{'.$tokenKey.'}}';
@@ -384,7 +384,7 @@ final class ScSesTransport extends AbstractTokenArrayTransport implements TokenT
         }
         MailHelper::searchReplaceTokens($mauticTokens, $tokenReplace, $this->message);
 
-        //Create the template payload
+        // Create the template payload
         $md5TemplateName = $this->message->getSubject();
         $template        = [
         'TemplateContent' => [
@@ -401,7 +401,7 @@ final class ScSesTransport extends AbstractTokenArrayTransport implements TokenT
             $md5TemplateName .= $this->message->getTextBody();
         }
 
-        $template['TemplateName'] = 'MauticTemplate-'.$emailId.'-'.md5($md5TemplateName); //unique template name
+        $template['TemplateName'] = 'MauticTemplate-'.$emailId.'-'.md5($md5TemplateName); // unique template name
 
         foreach ($metadata as $recipient => $mailData) {
             $ReplacementTemplateData = [];
