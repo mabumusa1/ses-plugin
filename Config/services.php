@@ -14,13 +14,8 @@ return function (ContainerConfigurator $configurator) {
 
     $excludes = [
         'Mailer/Transport/ScSesTransport.php',
-        'Helper/SesHelper.php',
     ];
 
     $services->load('MauticPlugin\\ScMailerSesBundle\\', '../')
         ->exclude('../{'.implode(',', array_merge(MauticCoreExtension::DEFAULT_EXCLUDES, $excludes)).'}');
-
-    $services->set('mailer.transport_factory.sc_ses', \MauticPlugin\ScMailerSesBundle\Mailer\Transport\ScSesFactory::class)
-        ->tag('mailer.transport_factory')
-        ->autowire();
 };
