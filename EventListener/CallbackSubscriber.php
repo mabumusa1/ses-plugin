@@ -6,12 +6,17 @@ use GuzzleHttp\Client;
 use GuzzleHttp\Exception\TransferException;
 use Mautic\EmailBundle\EmailEvents;
 use Mautic\EmailBundle\Model\TransportCallback;
+use Mautic\EmailBundle\Event\TransportWebhookEvent;
 use Mautic\LeadBundle\Entity\DoNotContact;
 use Psr\Log\LoggerInterface;
 use Symfony\Component\EventDispatcher\EventSubscriberInterface;
 use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpKernel\Exception\HttpException;
 use Symfony\Contracts\Translation\TranslatorInterface;
+use Symfony\Component\Mailer\Transport\Dsn;
+use Mautic\CoreBundle\Helper\CoreParametersHelper;
+use Symfony\Component\HttpFoundation\Response;
+use MauticPlugin\ScMailerSesBundle\CallbackMessages;
 
 class CallbackSubscriber implements EventSubscriberInterface
 {
@@ -23,16 +28,42 @@ class CallbackSubscriber implements EventSubscriberInterface
 
     private TransportCallback $transportCallback;
 
+    private CoreParametersHelper $coreParametersHelper;
+
     public function __construct(
         LoggerInterface $logger,
         Client $httpClient,
         TranslatorInterface $translator,
-        TransportCallback $transportCallback
+        TransportCallback $transportCallback,
+        CoreParametersHelper $coreParametersHelper
     ) {
         $this->logger            = $logger;
         $this->httpClient        = $httpClient;
         $this->translator        = $translator;
         $this->transportCallback = $transportCallback;
+        $this->coreParametersHelper = $coreParametersHelper;
+    }
+
+    private function createErrorResponse($message, $statusCode=Response::HTTP_OK) {
+        return new Response(
+            json_encode([
+                'message' => $message,
+                'success' => false,
+            ]),
+            $statusCode,
+            ['content-type' => 'application/json']
+        );
+    }
+
+    private function createSuccessResponse($message, $statusCode=Response::HTTP_BAD_REQUEST) {
+        return new Response(
+            json_encode([
+                'message' => $message,
+                'success' => true,
+            ]),
+            $statusCode,
+            ['content-type' => 'application/json']
+        );
     }
 
     /**
@@ -48,19 +79,34 @@ class CallbackSubscriber implements EventSubscriberInterface
     /**
      * Handle bounces & complaints from Amazon.
      */
-    public function processCallbackRequest(Request $request): void
+    public function processCallbackRequest(TransportWebhookEvent $event): void
     {
-        $this->logger->debug('Receiving webhook from Amazon');
+        $dsn = Dsn::fromString($this->coreParametersHelper->get('mailer_dsn'));
+        if ('ses+api' !== $dsn->getScheme()) {
+            return;
+        }
 
+        $this->logger->debug('Start processCallbackRequest - webhook from Amazon');
         try {
+            $request = $event->getRequest();
             $payload = json_decode($request->getContent(), true, 512, JSON_THROW_ON_ERROR);
         } catch (\Exception $e) {
             $this->logger->error('AmazonCallback: Invalid JSON Payload');
-            throw new HttpException(400, 'AmazonCallback: Invalid JSON Payload');
+            $event->setResponse(
+                $this->createErrorResponse(
+                    CallbackMessages::INVALID_JSON_PAYLOAD_ERROR
+                )
+            );
+            return;
         }
 
         if (0 !== json_last_error()) {
-            throw new HttpException(400, 'AmazonCallback: Invalid JSON Payload');
+            $event->setResponse(
+                $this->createErrorResponse(
+                    CallbackMessages::INVALID_JSON_PAYLOAD_ERROR
+                )
+            );
+            return;
         }
 
         $type    = '';
@@ -69,10 +115,24 @@ class CallbackSubscriber implements EventSubscriberInterface
         } elseif (array_key_exists('eventType', $payload)) {
             $type = $payload['eventType'];
         } else {
-            throw new HttpException(400, "Key 'Type' not found in payload");
+            $event->setResponse(
+                $this->createErrorResponse(
+                    CallbackMessages::TYPE_MISSING_ERROR
+                )
+            );
+            return;
         }
 
-        $this->processJsonPayload($payload, $type);
+        [$hasError, $message] = $this->processJsonPayload($payload, $type);
+        if ($hasError) {
+            $eventResponse = $this->createErrorResponse($message);
+        }
+        else {
+            $eventResponse = $this->createSuccessResponse($message);
+        }
+
+        $this->logger->debug('End processCallbackRequest - webhook from Amazon');
+        $event->setResponse($eventResponse);
     }
 
     /**
@@ -82,10 +142,15 @@ class CallbackSubscriber implements EventSubscriberInterface
      *
      * @param array<string, mixed> $payload from Amazon SES
      */
-    public function processJsonPayload(array $payload, $type): void
+    public function processJsonPayload(array $payload, $type): array
     {
+        $typeFound = false;
+        $hasError = false;
+        $message = 'PROCESSED';
         switch ($type) {
             case 'SubscriptionConfirmation':
+                $typeFound = true;
+
                 $reason = null;
 
                 // Confirm Amazon SNS subscription by calling back the SubscribeURL from the playload
@@ -106,22 +171,32 @@ class CallbackSubscriber implements EventSubscriberInterface
                         'Callback to SubscribeURL from Amazon SNS failed, reason: ',
                         ['reason' => $reason]
                     );
+
+                    $hasError = true;
+                    $message = CallbackMessages::UNSUBSCRIBE_ERROR;
                 }
+
                 break;
 
             case 'Notification':
+                $typeFound = true;
+
                 try {
                     $message = json_decode($payload['Message'], true, 512, JSON_THROW_ON_ERROR);
+                    $this->processJsonPayload($message, $message['notificationType']);
                 } catch (\Exception $e) {
                     $this->logger->error('AmazonCallback: Invalid Notification JSON Payload');
-                    throw new HttpException(400, 'AmazonCallback: Invalid Notification JSON Payload');
+
+                    $hasError = true;
+                    $message = CallbackMessages::INVALID_JSON_PAYLOAD_NOTIFICATION_ERROR;
                 }
 
-                $this->processJsonPayload($message, $message['notificationType']);
+                
                 break;
 
             case 'Complaint':
-                // $message = json_decode($payload['Message'], true);
+                $typeFound = true;
+
                 $emailId = null;
                 if (isset($payload['mail']['headers'])) {
                     foreach ($payload['mail']['headers'] as $header) {
@@ -141,6 +216,8 @@ class CallbackSubscriber implements EventSubscriberInterface
                 break;
 
             case 'Bounce':
+                $typeFound = true;
+
                 if ('Permanent' == $message['bounce']['bounceType']) {
                     $emailId = null;
 
@@ -168,5 +245,17 @@ class CallbackSubscriber implements EventSubscriberInterface
                 );
                 break;
         }
+
+        if (!$typeFound) {
+            $message = sprintf(
+                CallbackMessages::UNKNOWN_TYPE_WARNING, 
+                $type
+            );
+        }
+
+        return [
+            'hasError' => $hasError,
+            'message' => $message
+        ];
     }
 }
