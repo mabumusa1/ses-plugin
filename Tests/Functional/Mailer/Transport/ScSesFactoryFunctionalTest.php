@@ -92,9 +92,9 @@ class ScSesFactoryFunctionalTest extends KernelTestCase
         ->getRepository(SesSetting::class)
         ->findOneBy(['accessKey' => 'user']);
 
-        //Assert Record created in the database with right data
+        // Assert Record created in the database with right data
         $this->assertEquals(100, $setting->getMaxSendRate());
-        //HandlerMock should be empty now
+        // HandlerMock should be empty now
         $this->assertEquals(0, $handlerMock->count());
     }
 
@@ -111,7 +111,7 @@ class ScSesFactoryFunctionalTest extends KernelTestCase
         ->getRepository(SesSetting::class)
         ->findOneBy(['accessKey' => 'user']);
 
-        //Assert Record created in the database with right data
+        // Assert Record created in the database with right data
         $this->assertEquals(14, $setting->getMaxSendRate());
     }
 
@@ -139,7 +139,7 @@ class ScSesFactoryFunctionalTest extends KernelTestCase
         $client    = $factory::getClient();
         $transport = new ScSesTransport($this->emMock, $this->dispatcherMock, $this->loggerMock, $client, $setting, false);
         $this->assertEquals($transport, $factory->create(new Dsn('sc+ses+api', 'default', 'user', 'password', null, ['region' => 'us-east-1', 'enableTemplate' => false])));
-        //GetAccount is never called, so the mockshould not clear
+        // GetAccount is never called, so the mockshould not clear
         $this->assertEquals(1, $handlerMock->count());
     }
 }
