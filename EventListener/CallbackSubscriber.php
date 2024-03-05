@@ -176,7 +176,7 @@ class CallbackSubscriber implements EventSubscriberInterface
                     );
 
                     $hasError = true;
-                    $message  = CallbackMessages::UNSUBSCRIBE_ERROR;
+                    $message  = CallbackMessages::SUBSCRIBE_ERROR;
                 }
 
                 break;

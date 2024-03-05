@@ -8,7 +8,7 @@ final class CallbackMessages
 
     public const TYPE_MISSING_ERROR = 'MauticAmazonCallback: Key Type not found in payload.';
 
-    public const UNSUBSCRIBE_ERROR = 'MauticAmazonCallback: SubscribeURL from Amazon SNS failed.';
+    public const SUBSCRIBE_ERROR = 'MauticAmazonCallback: SubscribeURL from Amazon SNS failed.';
 
     public const INVALID_JSON_PAYLOAD_NOTIFICATION_ERROR = 'MauticAmazonCallback: Invalid Notification JSON Payload.';
 
