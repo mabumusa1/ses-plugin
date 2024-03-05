@@ -4,19 +4,18 @@ namespace MauticPlugin\ScMailerSesBundle\EventListener;
 
 use GuzzleHttp\Client;
 use GuzzleHttp\Exception\TransferException;
+use Mautic\CoreBundle\Helper\CoreParametersHelper;
 use Mautic\EmailBundle\EmailEvents;
-use Mautic\EmailBundle\Model\TransportCallback;
 use Mautic\EmailBundle\Event\TransportWebhookEvent;
+use Mautic\EmailBundle\Model\TransportCallback;
 use Mautic\LeadBundle\Entity\DoNotContact;
+use MauticPlugin\ScMailerSesBundle\CallbackMessages;
 use Psr\Log\LoggerInterface;
 use Symfony\Component\EventDispatcher\EventSubscriberInterface;
 use Symfony\Component\HttpFoundation\Request;
-use Symfony\Component\HttpKernel\Exception\HttpException;
-use Symfony\Contracts\Translation\TranslatorInterface;
-use Symfony\Component\Mailer\Transport\Dsn;
-use Mautic\CoreBundle\Helper\CoreParametersHelper;
 use Symfony\Component\HttpFoundation\Response;
-use MauticPlugin\ScMailerSesBundle\CallbackMessages;
+use Symfony\Component\Mailer\Transport\Dsn;
+use Symfony\Contracts\Translation\TranslatorInterface;
 
 class CallbackSubscriber implements EventSubscriberInterface
 {
@@ -37,14 +36,15 @@ class CallbackSubscriber implements EventSubscriberInterface
         TransportCallback $transportCallback,
         CoreParametersHelper $coreParametersHelper
     ) {
-        $this->logger            = $logger;
-        $this->httpClient        = $httpClient;
-        $this->translator        = $translator;
-        $this->transportCallback = $transportCallback;
+        $this->logger               = $logger;
+        $this->httpClient           = $httpClient;
+        $this->translator           = $translator;
+        $this->transportCallback    = $transportCallback;
         $this->coreParametersHelper = $coreParametersHelper;
     }
 
-    private function createErrorResponse($message, $statusCode=Response::HTTP_OK) {
+    private function createErrorResponse($message, $statusCode=Response::HTTP_OK)
+    {
         return new Response(
             json_encode([
                 'message' => $message,
@@ -55,7 +55,8 @@ class CallbackSubscriber implements EventSubscriberInterface
         );
     }
 
-    private function createSuccessResponse($message, $statusCode=Response::HTTP_BAD_REQUEST) {
+    private function createSuccessResponse($message, $statusCode=Response::HTTP_BAD_REQUEST)
+    {
         return new Response(
             json_encode([
                 'message' => $message,
@@ -97,6 +98,7 @@ class CallbackSubscriber implements EventSubscriberInterface
                     CallbackMessages::INVALID_JSON_PAYLOAD_ERROR
                 )
             );
+
             return;
         }
 
@@ -106,6 +108,7 @@ class CallbackSubscriber implements EventSubscriberInterface
                     CallbackMessages::INVALID_JSON_PAYLOAD_ERROR
                 )
             );
+
             return;
         }
 
@@ -120,14 +123,14 @@ class CallbackSubscriber implements EventSubscriberInterface
                     CallbackMessages::TYPE_MISSING_ERROR
                 )
             );
+
             return;
         }
 
         [$hasError, $message] = $this->processJsonPayload($payload, $type);
         if ($hasError) {
             $eventResponse = $this->createErrorResponse($message);
-        }
-        else {
+        } else {
             $eventResponse = $this->createSuccessResponse($message);
         }
 
@@ -145,8 +148,8 @@ class CallbackSubscriber implements EventSubscriberInterface
     public function processJsonPayload(array $payload, $type): array
     {
         $typeFound = false;
-        $hasError = false;
-        $message = 'PROCESSED';
+        $hasError  = false;
+        $message   = 'PROCESSED';
         switch ($type) {
             case 'SubscriptionConfirmation':
                 $typeFound = true;
@@ -173,7 +176,7 @@ class CallbackSubscriber implements EventSubscriberInterface
                     );
 
                     $hasError = true;
-                    $message = CallbackMessages::UNSUBSCRIBE_ERROR;
+                    $message  = CallbackMessages::UNSUBSCRIBE_ERROR;
                 }
 
                 break;
@@ -188,10 +191,15 @@ class CallbackSubscriber implements EventSubscriberInterface
                     $this->logger->error('AmazonCallback: Invalid Notification JSON Payload');
 
                     $hasError = true;
-                    $message = CallbackMessages::INVALID_JSON_PAYLOAD_NOTIFICATION_ERROR;
+                    $message  = CallbackMessages::INVALID_JSON_PAYLOAD_NOTIFICATION_ERROR;
                 }
 
-                
+                break;
+
+            case 'Delivery':
+                // Nothing more to do here.
+                $typeFound = true;
+
                 break;
 
             case 'Complaint':
@@ -248,14 +256,14 @@ class CallbackSubscriber implements EventSubscriberInterface
 
         if (!$typeFound) {
             $message = sprintf(
-                CallbackMessages::UNKNOWN_TYPE_WARNING, 
+                CallbackMessages::UNKNOWN_TYPE_WARNING,
                 $type
             );
         }
 
         return [
             'hasError' => $hasError,
-            'message' => $message
+            'message'  => $message,
         ];
     }
 }
