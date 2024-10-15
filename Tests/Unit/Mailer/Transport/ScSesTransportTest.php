@@ -233,10 +233,10 @@ class ScSesTransportTest extends \PHPUnit\Framework\TestCase
 
         $transport                          = new ScSesTransport($this->emMock, $this->dispatcherMock, $this->loggerMock, $this->client, $settingMock, true);
 
-        //Second call is createEmailTemplate
+        // Second call is createEmailTemplate
         $this->handler->append(new Result([]));
 
-        //Third call is sendBulkEmail
+        // Third call is sendBulkEmail
         $this->handler->append(new Result([
         'BulkEmailEntryResults' => [
              [
@@ -257,7 +257,7 @@ class ScSesTransportTest extends \PHPUnit\Framework\TestCase
         ],
       ]));
 
-        //Fourth call is deleteEmailTemplate
+        // Fourth call is deleteEmailTemplate
         $this->handler->append(new Result([]));
 
         $this->expectException(TransportException::class);
