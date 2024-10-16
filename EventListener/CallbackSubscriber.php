@@ -43,7 +43,7 @@ class CallbackSubscriber implements EventSubscriberInterface
         $this->coreParametersHelper = $coreParametersHelper;
     }
 
-    private function createErrorResponse($message, $statusCode=Response::HTTP_OK)
+    private function createErrorResponse($message, $statusCode=Response::HTTP_BAD_REQUEST)
     {
         return new Response(
             json_encode([
@@ -55,7 +55,7 @@ class CallbackSubscriber implements EventSubscriberInterface
         );
     }
 
-    private function createSuccessResponse($message, $statusCode=Response::HTTP_BAD_REQUEST)
+    private function createSuccessResponse($message, $statusCode=Response::HTTP_OK)
     {
         return new Response(
             json_encode([
@@ -127,7 +127,9 @@ class CallbackSubscriber implements EventSubscriberInterface
             return;
         }
 
-        [$hasError, $message] = $this->processJsonPayload($payload, $type);
+        $result = $this->processJsonPayload($payload, $type);
+        $message = $result['message'];
+        $hasError = $result['hasError'];
         if ($hasError) {
             $eventResponse = $this->createErrorResponse($message);
         } else {
@@ -149,7 +151,7 @@ class CallbackSubscriber implements EventSubscriberInterface
     {
         $typeFound = false;
         $hasError  = false;
-        $message   = 'PROCESSED';
+        $responseMessage   = CallbackMessages::PROCESSED;
         switch ($type) {
             case 'SubscriptionConfirmation':
                 $typeFound = true;
@@ -176,7 +178,7 @@ class CallbackSubscriber implements EventSubscriberInterface
                     );
 
                     $hasError = true;
-                    $message  = CallbackMessages::SUBSCRIBE_ERROR;
+                    $responseMessage  = CallbackMessages::SUBSCRIBE_ERROR;
                 }
 
                 break;
@@ -191,7 +193,7 @@ class CallbackSubscriber implements EventSubscriberInterface
                     $this->logger->error('AmazonCallback: Invalid Notification JSON Payload');
 
                     $hasError = true;
-                    $message  = CallbackMessages::INVALID_JSON_PAYLOAD_NOTIFICATION_ERROR;
+                    $responseMessage  = CallbackMessages::INVALID_JSON_PAYLOAD_NOTIFICATION_ERROR;
                 }
 
                 break;
@@ -215,7 +217,7 @@ class CallbackSubscriber implements EventSubscriberInterface
                 }
 
                 // Get bounced recipients in an array
-                $complaintRecipients = $message['complaint']['complainedRecipients'];
+                $complaintRecipients = $payload['complaint']['complainedRecipients'];
                 foreach ($complaintRecipients as $complaintRecipient) {
                     $bounceCode = array_key_exists('complaintFeedbackType', $complaintRecipient) ? $complaintRecipient['complaintFeedbackType'] : 'unknown';
                     $this->transportCallback->addFailureByAddress($complaintRecipient['emailAddress'], $bounceCode, DoNotContact::BOUNCED, $emailId);
@@ -225,8 +227,8 @@ class CallbackSubscriber implements EventSubscriberInterface
 
             case 'Bounce':
                 $typeFound = true;
-
-                if ('Permanent' == $message['bounce']['bounceType']) {
+                
+                if ('Permanent' == $payload['bounce']['bounceType']) {
                     $emailId = null;
 
                     if (isset($payload['mail']['headers'])) {
@@ -237,7 +239,7 @@ class CallbackSubscriber implements EventSubscriberInterface
                         }
                     }
                     // Get bounced recipients in an array
-                    $bouncedRecipients = $message['bounce']['bouncedRecipients'];
+                    $bouncedRecipients = $payload['bounce']['bouncedRecipients'];
                     foreach ($bouncedRecipients as $bouncedRecipient) {
                         $bounceCode = array_key_exists('diagnosticCode', $bouncedRecipient) ? $bouncedRecipient['diagnosticCode'] : 'unknown';
                         $this->transportCallback->addFailureByAddress($bouncedRecipient['emailAddress'], $bounceCode, DoNotContact::BOUNCED, $emailId);
@@ -255,7 +257,7 @@ class CallbackSubscriber implements EventSubscriberInterface
         }
 
         if (!$typeFound) {
-            $message = sprintf(
+            $responseMessage = sprintf(
                 CallbackMessages::UNKNOWN_TYPE_WARNING,
                 $type
             );
@@ -263,7 +265,7 @@ class CallbackSubscriber implements EventSubscriberInterface
 
         return [
             'hasError' => $hasError,
-            'message'  => $message,
+            'message'  => $responseMessage,
         ];
     }
 }
