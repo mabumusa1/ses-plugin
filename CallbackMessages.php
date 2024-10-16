@@ -13,4 +13,5 @@ final class CallbackMessages
     public const INVALID_JSON_PAYLOAD_NOTIFICATION_ERROR = 'MauticAmazonCallback: Invalid Notification JSON Payload.';
 
     public const UNKNOWN_TYPE_WARNING = 'MauticAmazonCallback: Type not found in implementaion, no processing was done for type: %s.';
+    public const PROCESSED = 'MauticAmazonCallback: PROCESSED.';
 }
